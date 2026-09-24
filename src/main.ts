@@ -88,7 +88,7 @@ const button = (text: string, action: string, cls = "") => `<button class="${cls
 const graded = (q: QuestionRow | QuestionInput) => q.type === "single_choice" || q.type === "multiple_choice" || q.type === "blank";
 const brushTypes = ["single_choice","multiple_choice","blank","recall"] as const;
 type BrushType = typeof brushTypes[number];
-const brushLabels: Record<BrushType,string> = { single_choice:"单", multiple_choice:"多", blank:"填", recall:"卡" };
+const brushLabels: Record<BrushType,string> = { single_choice:"单选", multiple_choice:"多选", blank:"填空", recall:"背诵卡" };
 const brushStorageKey = "knoop.enabledBrushTypes.v1";
 function loadBrushTypes(): Set<BrushType> {
   try {
@@ -146,7 +146,7 @@ const expandedListItems = new Map<ExpandableListKind, Set<string>>();
 function expandedSet(kind: ExpandableListKind): Set<string> { let set=expandedListItems.get(kind); if(!set){set=new Set<string>();expandedListItems.set(kind,set);} return set; }
 function shell(title: string, body: string, back = true, right = "", titleAction = "") {
   const rightSlot = back ? (right || `<span class="header-spacer" aria-hidden="true"></span>`) : right;
-  const titleBody = titleAction ? `<button class="header-title" data-action="${esc(titleAction)}">${esc(title)}</button>` : esc(title);
+  const titleBody = titleAction ? `<button class="header-title" data-action="${esc(titleAction)}" aria-label="${esc(title)}，打开题目目录"><span>${esc(title)}</span><span class="header-title-hint" aria-hidden="true">目录 ⌄</span></button>` : esc(title);
   app.innerHTML = `<header class="${back ? "has-back" : "no-back"}">${back ? `<button class="icon" data-action="back" aria-label="返回上一页">‹</button>` : ""}<h1>${titleBody}</h1>${rightSlot}</header><main>${body}</main>`;
   renderMath();
 }
@@ -232,17 +232,21 @@ async function home() {
   const recent = scopePresets.find(p=>p.id===recentPresetId());
   const recentCard = recent ? `<section class="home-recent-preset"><div><small>最近组题</small><b>${esc(recent.name)}</b><span>${esc(presetSummary(recent))}</span></div><button class="primary" data-action="start-preset:${esc(recent.id)}">开始</button></section>` : "";
   const filters = brushTypes.map(type => `<button class="type-filter ${enabledBrushTypes.has(type)?"active":""}" data-action="filter-type:${type}" aria-pressed="${enabledBrushTypes.has(type)}">${brushLabels[type]}</button>`).join("");
-  app.innerHTML = `<main class="home-main"><div class="home-summary">题库：<b>${summary.banks}</b><span>题数：<b>${summary.questions}</b></span></div>
-    <div class="type-filter-row"><span>题型</span>${filters}</div>
+  app.innerHTML = `<main class="home-main"><div class="home-heading"><h1>Knoop</h1><p>从自己的题库开始练习</p></div><div class="home-summary">${summary.banks} 个题库<span>${summary.questions} 项内容</span></div>
+    <div class="type-filter-row"><span>刷题题型</span><div class="type-filter-options">${filters}</div></div>
     ${recentCard}
-    <div class="stack">
+    <section class="home-group"><h2 class="section-title">开始学习</h2><div class="stack">
       ${resume ? button("继续上次学习", `resume:${resume.id}`, "primary") : ""}
-      ${button("选择范围", "scope", "primary")}
+      ${summary.banks ? button("选择范围", "scope", "primary") : button("导入题库，开始学习", "import", "primary")}
       ${button("常用组题", "presets")}
+    </div></section>
+    <section class="home-group"><h2 class="section-title">学习记录</h2><div class="stack">
       <div class="grid">${button("错题", "wrong")}${button("收藏", "favorites")}</div>
       <div class="grid">${button(pendingReviews?`待返修 ${pendingReviews}`:"待返修", "reviews")}${button("笔记", "notes")}</div>
+    </div></section>
+    <section class="home-group"><h2 class="section-title">题库与统计</h2><div class="stack">
       <div class="grid">${button("题库 / 导入", "import")}${button("基础统计", "stats")}</div>
-    </div></main>`;
+    </div></section></main>`;
   renderMath();
 }
 
@@ -259,7 +263,7 @@ async function importView() {
     </div>`).join("");
   shell("题库管理", `<input id="file" class="visually-hidden-file" type="file" accept="application/json,.json" multiple>
     <div id="message" class="message"></div>
-    ${banks.length ? `<section><h2 class="section-title">已导入题库</h2>${exportToolbar}<div class="bank-list">${rows}</div></section>` : `<div class="empty compact">暂无已导入题库</div>`}
+    ${banks.length ? `<section><h2 class="section-title">已导入题库</h2>${exportToolbar}<div class="bank-list">${rows}</div></section>` : `<div class="empty compact"><h2>还没有题库</h2><p>导入 Knoop JSON 题库后，就可以选择范围开始学习。</p>${button("导入题库","pick-import","primary")}</div>`}
     ${killed.length ? `<section><h2 class="section-title">题目管理</h2>${button(`已斩杀 ${killed.length} 题`,"killed")}</section>`:""}`,
     true,
     `<button class="header-action" data-action="pick-import">导入</button>`);
@@ -315,7 +319,7 @@ function buildScopeTree(nodes: NodeRow[]) {
   return { children, byId, subtreeIds };
 }
 
-async function scopeView() {
+async function scopeView(focusAction = "") {
   const banks = await getBanks(); const nodes = await getNodes(); const allQuestions = await getQuestions();
   scopeNodesCache = nodes; scopeContentNodeIds = new Set(allQuestions.map(q => q.node_id));
   const { children } = buildScopeTree(nodes);
@@ -354,13 +358,17 @@ async function scopeView() {
     return `<section class="scope-bank"><div class="bank-heading"><label class="scope-check bank-check"><input type="checkbox" data-bank-check="${esc(b.id)}" data-action="scope-bank:${esc(b.id)}" ${state.checked ? "checked" : ""}><span class="bank-heading-text"><b>${esc(b.title)}</b><small>更新 ${esc(formatUpdatedAt(b.updated_at))}</small></span></label>${bankCollapsible.length?`<button class="bank-fold" data-action="scope-bank-fold:${esc(b.id)}" aria-label="${allCollapsed?"展开此题库":"折叠此题库"}" title="${allCollapsed?"展开此题库":"折叠此题库"}">${allCollapsed?"›":"⌄"}</button>`:""}</div>${roots.map(n => renderNode(n)).join("")}</section>`;
   };
   const selectedCount = selectedScopeNodes.size;
+  const selectedRows = allQuestions.filter(q => selectedScopeNodes.has(q.node_id));
+  const brushCount = selectedRows.filter(isEnabledBrush).length;
+  const memorizationCount = selectedRows.filter(q => q.type === "memorization").length;
   const toolbar = banks.length ? `<div class="scope-toolbar"><button class="scope-fold-symbol" data-action="scope-expand-all" aria-label="全部展开" title="全部展开">⌄</button><button class="scope-fold-symbol" data-action="scope-collapse-all" aria-label="全部折叠" title="全部折叠">›</button></div>` : "";
-  shell("选择范围", banks.length ? `${toolbar}${banks.map(renderBank).join("")}<div class="scope-bottom"><div><b>${selectedCount}</b> 个节点</div><button class="primary" data-action="scope-next" ${selectedCount ? "" : "disabled"}>下一步</button></div>` : `<div class="empty">还没有题库。${button("去导入", "import", "primary")}</div>`);
+  shell("选择范围", banks.length ? `${toolbar}${banks.map(renderBank).join("")}<div class="scope-bottom"><div><b>${selectedCount}</b> 个范围 · 可刷 ${brushCount} 题 · 可背 ${memorizationCount} 项</div><button class="primary" data-action="scope-next" ${selectedCount ? "" : "disabled"}>下一步</button></div>` : `<div class="empty">还没有题库。${button("去导入", "import", "primary")}</div>`);
   for (const input of document.querySelectorAll<HTMLInputElement>("[data-scope-check]")) { const id = input.dataset.scopeCheck!; const state = stateFor(coverageIds(id)); input.indeterminate = state.partial; }
   for (const input of document.querySelectorAll<HTMLInputElement>("[data-bank-check]")) {
     const bankId=input.dataset.bankCheck!; const roots=(children.get(null)??[]).filter(n=>n.bank_id===bankId);
     const ids=[...new Set(roots.flatMap(r=>coverageIds(r.id)))]; input.indeterminate = stateFor(ids).partial;
   }
+  if(focusAction)document.querySelectorAll<HTMLElement>("[data-action]").forEach(element=>{if(element.dataset.action===focusAction)element.focus({preventScroll:true});});
 }
 function scopeCoverageIds(nodeId: string): string[] {
   const { children } = buildScopeTree(scopeNodesCache); const out:string[]=[];
@@ -465,7 +473,7 @@ async function chooseScope(nodeIds: string[]) {
     ${button("随机背诵","start-scope:memorization-random")}
     ${button("背诵目录","open-directory:memorization")}
   </section>` : "";
-  shell("选择模式", brushCard+memoCard || `<div class="empty">当前范围没有符合筛选条件的内容</div>`);
+  shell("选择模式", `<p class="scope-selection-summary">当前范围：可刷 ${answerable.length} 题 · 可背 ${memorization.length} 项</p>` + (brushCard+memoCard || `<div class="empty">当前范围没有符合筛选条件的内容</div>`));
 }
 
 async function startScope(mode:string,nodeIds:string[],count?:number) {
@@ -495,9 +503,20 @@ function directoryMatches(q: QuestionInput, query: string): boolean {
 function directoryEntries(rows: QuestionRow[], query: string): Array<{row:QuestionRow;index:number}> {
   return rows.map((row,index)=>({row,index})).filter(({row})=>directoryMatches(parseQuestion(row),query));
 }
-function directoryListHtml(entries:Array<{row:QuestionRow;index:number}>,sessionId?:string,currentIndex=-1):string {
+function directoryMatchLocation(q:QuestionInput,query:string):string {
+  const terms=query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  if(!terms.length || terms.some(term=>questionLead(q).toLocaleLowerCase().includes(term)))return "";
+  const fields:[string,string][]=[
+    ...((q.options??[]).map(option=>["选项",option.text] as [string,string])),
+    ["答案",Array.isArray(q.answer)?q.answer.join(" "):String(q.answer??"")],
+    ["解析",q.explanation??""],["背面",q.back??""],["内容",q.content??""],
+    ["标签",(q.tags??[]).join(" ")],["要点",(q.keyPoints??[]).join(" ")]
+  ];
+  return fields.find(([,value])=>terms.some(term=>value.toLocaleLowerCase().includes(term)))?.[0]??"";
+}
+function directoryListHtml(entries:Array<{row:QuestionRow;index:number}>,sessionId?:string,currentIndex=-1,query=""):string {
   if(!entries.length)return `<div class="empty compact">没有匹配内容</div>`;
-  return entries.map(({row:r,index:i})=>{const q=parseQuestion(r);return `<button class="directory-item ${i===currentIndex?"current":""}" data-action="${sessionId?`jump-session:${i}`:`start-directory:${i}`}"><b>${i+1}</b><span class="type">${questionTypeLabel(q)}</span><span class="directory-text">${esc(questionLead(q))}</span></button>`}).join("");
+  return entries.map(({row:r,index:i})=>{const q=parseQuestion(r), location=directoryMatchLocation(q,query);return `<button class="directory-item ${i===currentIndex?"current":""}" data-action="${sessionId?`jump-session:${i}`:`start-directory:${i}`}"><b>${i+1}</b><span class="type">${questionTypeLabel(q)}</span><span class="directory-copy"><span class="directory-text">${esc(questionLead(q))}</span>${location?`<small class="directory-match">命中${esc(location)}</small>`:""}</span></button>`}).join("");
 }
 function directorySearchActionsHtml(route: Extract<Route,{view:"directory"}>, count:number):string {
   if(route.sessionId || !route.query?.trim() || !count)return "";
@@ -517,12 +536,12 @@ async function directoryView(route: Extract<Route,{view:"directory"}>) {
   }
   if(!rows.length){return shell(title,`<div class="empty">没有可定位的内容</div>`);}
   const query=route.query??""; const entries=directoryEntries(rows,query);
-  shell(title,`<div class="directory-search"><input id="directory-search" type="search" placeholder="搜索题干、选项、答案、解析、标签" value="${esc(query)}"><span id="directory-search-count">${query.trim()?`找到 ${entries.length} / ${rows.length}`:`共 ${rows.length} 项`}</span></div><div id="directory-search-actions">${directorySearchActionsHtml(route,entries.length)}</div><div class="directory-jump"><input id="directory-index" type="number" min="1" max="${rows.length}" value="${Math.max(1,currentIndex+1)}" inputmode="numeric"><button data-action="directory-go">前往题号</button></div><div id="directory-list" class="directory-list">${directoryListHtml(entries,route.sessionId,currentIndex)}</div>`);
+  shell(title,`<div class="directory-search"><input id="directory-search" type="search" placeholder="搜索题干、选项、答案、解析、标签" value="${esc(query)}"><span id="directory-search-count">${query.trim()?`找到 ${entries.length} / ${rows.length}`:`共 ${rows.length} 项`}</span></div><div id="directory-search-actions">${directorySearchActionsHtml(route,entries.length)}</div><div class="directory-jump"><input id="directory-index" type="number" min="1" max="${rows.length}" value="${Math.max(1,currentIndex+1)}" inputmode="numeric"><button data-action="directory-go">前往题号</button></div><div id="directory-list" class="directory-list">${directoryListHtml(entries,route.sessionId,currentIndex,query)}</div>`);
   const search=document.querySelector<HTMLInputElement>("#directory-search");
   search?.addEventListener("input",()=>{
     const nextRoute={...route,query:search.value}; history.replaceState(nextRoute,"");
     const nextEntries=directoryEntries(rows,search.value); const count=document.querySelector<HTMLElement>("#directory-search-count"); if(count)count.textContent=search.value.trim()?`找到 ${nextEntries.length} / ${rows.length}`:`共 ${rows.length} 项`;
-    const list=document.querySelector<HTMLElement>("#directory-list"); if(list){list.innerHTML=directoryListHtml(nextEntries,route.sessionId,currentIndex);renderMath(list);}
+    const list=document.querySelector<HTMLElement>("#directory-list"); if(list){list.innerHTML=directoryListHtml(nextEntries,route.sessionId,currentIndex,search.value);renderMath(list);}
     const actions=document.querySelector<HTMLElement>("#directory-search-actions"); if(actions)actions.innerHTML=directorySearchActionsHtml(nextRoute,nextEntries.length);
   });
 }
@@ -563,7 +582,7 @@ async function quizView(){
   else bottom=`<button class="primary" data-action="submit" ${canSubmit?"":"disabled"}>提交答案</button>`;
   const quickAvailable=["sequential","random","recall","memorization"].includes(activeSession.mode);
   const quickButton=quickAvailable?`<button class="header-action ${quickMode?"active":""}" data-action="toggle-quick" aria-pressed="${quickMode}">快刷${quickMode?"✓":""}</button>`:"";
-  shell(progress,`<article class="quiz">${content}</article><div class="question-actions"><button data-action="favorite:${esc(row.id)}">${fav?"★ 已收藏":"☆ 收藏"}</button><button class="${killed?"kill-active":""}" data-action="kill:${esc(row.id)}" ${reviewed?"disabled":""}>${reviewed?"已斩杀":killed?"恢复":"斩杀"}</button><button class="${reviewed?"review-active":""}" data-action="review:${esc(row.id)}">${reviewed?"● 待返修":"审核"}</button><button class="${note?"note-active":""}" data-action="note:${esc(row.id)}">${note?"● 笔记":"笔记"}</button><button data-action="edit:${esc(row.id)}">编辑</button></div>${bottom?`<div class="bottom-actions">${bottom}</div>`:""}`,true,quickButton,"session-directory");
+  shell(progress,`<article class="quiz">${content}</article><div class="question-actions"><button data-action="favorite:${esc(row.id)}">${fav?"★ 已收藏":"☆ 收藏"}</button><button class="${note?"note-active":""}" data-action="note:${esc(row.id)}">${note?"● 笔记":"笔记"}</button><details class="question-more"><summary>更多操作</summary><div class="question-more-panel"><button class="${killed?"kill-active":""}" data-action="kill:${esc(row.id)}" ${reviewed?"disabled":""}>${reviewed?"已斩杀":killed?"恢复":"斩杀"}</button><button class="${reviewed?"review-active":""}" data-action="review:${esc(row.id)}">${reviewed?"● 待返修":"审核"}</button><button data-action="edit:${esc(row.id)}">编辑</button></div></details></div>${bottom?`<div class="bottom-actions">${bottom}</div>`:""}`,true,quickButton,"session-directory");
   const blank=document.querySelector<HTMLInputElement>("#blank"); if(blank) blank.oninput=()=>{blankValue=blank.value; const submit=document.querySelector<HTMLButtonElement>('[data-action="submit"]'); if(submit)submit.disabled=!blankValue.trim(); void persistDraft();};
   bindOptionLongPress();
 }
@@ -584,7 +603,7 @@ async function record(questionId:string,answer:unknown,grading:string,correct:bo
   pageState={submitted:true,correct};await persistDraft();await quizView();
 }
 async function next(){if(!activeSession)return;const nextIndex=activeSession.current_index+1;selection.clear();excludedOptions.clear();blankValue="";pageState={};await saveSession(activeSession.id,nextIndex,{quickMode},nextIndex>=activeRows.length);activeSession.current_index=nextIndex;if(nextIndex>=activeRows.length)finishView();else await quizView();}
-function finishView(){shell("本轮完成",`<div class="empty"><div class="finish">✓</div><h2>完成了 ${activeRows.length} 项</h2>${button("返回首页","home","primary")}</div>`,false);}
+function finishView(){shell("本轮完成",`<div class="empty finish-page"><div class="finish">✓</div><h2>完成了 ${activeRows.length} 项</h2><p>本轮学习已保存。</p>${button("查看当前错题","wrong")}${button("返回首页","home","primary")}</div>`,false);}
 
 function bindOptionLongPress(){
   if(pageState.submitted||pageState.pendingManual)return;
@@ -744,18 +763,18 @@ function listHeaderToggle(kind:ExpandableListKind,ids:string[]): string {
 }
 function expandableCard(kind:ExpandableListKind,row:QuestionRow,summaryExtra:string,actions:string,expandedExtra:string): string {
   const q=parseQuestion(row), expanded=expandedSet(kind).has(row.id), action=listCardAction(kind,row.id);
-  return `<div class="card compact-list-card expandable-list-card ${expanded?"expanded":""}"><div class="compact-card-head"><span class="type">${questionTypeLabel(q)}</span><div class="compact-card-actions">${actions}</div></div><div class="expandable-card-summary" data-action="${action}"><p class="compact-card-title multiline">${esc(questionLead(q))}</p>${summaryExtra}</div>${expanded?`<div class="expandable-card-detail" data-action="${action}">${expandableQuestionDetail(q)}${expandedExtra}</div>`:""}</div>`;
+  return `<div class="card compact-list-card expandable-list-card ${expanded?"expanded":""}"><div class="compact-card-head"><span class="type">${questionTypeLabel(q)}</span><div class="compact-card-actions">${actions}</div></div><button class="expandable-card-summary" data-action="${action}" aria-expanded="${expanded}"><span class="compact-card-title multiline">${esc(questionLead(q))}</span><span class="expandable-card-symbol" aria-hidden="true">${expanded?"收起 ⌃":"展开 ⌄"}</span>${summaryExtra}</button>${expanded?`<div class="expandable-card-detail">${expandableQuestionDetail(q)}${expandedExtra}</div>`:""}</div>`;
 }
 async function listView(kind:ListKind) {
   if(kind==="killed"){const rows=await killedQuestions();return shell("已斩杀",rows.length?`<div class="question-list">${rows.map(r=>{const q=parseQuestion(r);return `<div class="card"><span class="type">${questionTypeLabel(q)}</span><p class="multiline">${esc(questionLead(q))}</p><button data-action="restore-killed:${esc(r.id)}">恢复</button></div>`}).join("")}</div>`:`<div class="empty">暂无已斩杀题目</div>`);}
   if(kind==="notes"){
     const rows=await noteQuestions();
-    const body=rows.map(r=>expandableCard("notes",r,`<div class="note-preview compact-preview multiline">${esc(r.note_content)}</div>`,`<button data-action="note:${esc(r.id)}">编辑</button>`,`<section class="expanded-meta"><b>笔记</b><div class="multiline">${esc(r.note_content)}</div></section>`)).join("");
+    const body=rows.map(r=>expandableCard("notes",r,`<span class="note-preview compact-preview multiline">${esc(r.note_content)}</span>`,`<button data-action="note:${esc(r.id)}">编辑</button>`,`<section class="expanded-meta"><b>笔记</b><div class="multiline">${esc(r.note_content)}</div></section>`)).join("");
     return shell("笔记",rows.length?`<div class="question-list compact-list">${body}</div>`:`<div class="empty">暂无笔记</div>`,true,rows.length?listHeaderToggle("notes",rows.map(r=>r.id)):"");
   }
   if(kind==="reviews"){
     const rows=await reviewQuestions(); const labels=new Map(reviewIssueLabels);
-    const body=rows.map(r=>{const issues=(JSON.parse(r.review_issues_json) as ReviewIssue[]).map(x=>labels.get(x)??x).join(" / ");const q=parseQuestion(r);const attempt=r.latest_answered_at?`<section class="expanded-meta"><b>最近作答</b><div class="multiline">${esc(storedUserAnswerText(q,r.latest_user_answer))}</div><small>${r.latest_is_correct===1?"答对":"答错"} · ${esc(r.latest_answered_at)}</small></section>`:"";return expandableCard("reviews",r,`${issues?`<div class="review-tags">${esc(issues)}</div>`:""}${r.review_note?`<div class="note-preview compact-preview multiline">${esc(r.review_note)}</div>`:""}`,`${button("审核",`review:${r.id}`)}${button("编辑",`edit:${r.id}`)}`,`<section class="expanded-meta"><b>审核信息</b>${issues?`<div>${esc(issues)}</div>`:""}${r.review_note?`<div class="multiline">${esc(r.review_note)}</div>`:""}</section>${attempt}`)}).join("");
+    const body=rows.map(r=>{const issues=(JSON.parse(r.review_issues_json) as ReviewIssue[]).map(x=>labels.get(x)??x).join(" / ");const q=parseQuestion(r);const attempt=r.latest_answered_at?`<section class="expanded-meta"><b>最近作答</b><div class="multiline">${esc(storedUserAnswerText(q,r.latest_user_answer))}</div><small>${r.latest_is_correct===1?"答对":"答错"} · ${esc(r.latest_answered_at)}</small></section>`:"";return expandableCard("reviews",r,`${issues?`<span class="review-tags">${esc(issues)}</span>`:""}${r.review_note?`<span class="note-preview compact-preview multiline">${esc(r.review_note)}</span>`:""}`,`${button("审核",`review:${r.id}`)}${button("编辑",`edit:${r.id}`)}`,`<section class="expanded-meta"><b>审核信息</b>${issues?`<div>${esc(issues)}</div>`:""}${r.review_note?`<div class="multiline">${esc(r.review_note)}</div>`:""}</section>${attempt}`)}).join("");
     return shell("待返修",rows.length?`${button("导出返修 JSON","export-repair-review","primary")}<div class="question-list compact-list">${body}</div>`:`<div class="empty">暂无待返修题目</div>`,true,rows.length?listHeaderToggle("reviews",rows.map(r=>r.id)):"");
   }
   if(kind==="wrong"){
@@ -822,13 +841,13 @@ app.addEventListener("click",async e=>{const target=(e.target as HTMLElement).cl
     if(action.startsWith("start-preset:"))return startPresetById(action.slice("start-preset:".length));
     if(action.startsWith("delete-preset:")){const id=action.slice("delete-preset:".length);const preset=scopePresets.find(p=>p.id===id);if(!preset)return;if(!confirm(`删除常用组题“${preset.name}”？`))return;scopePresets=scopePresets.filter(p=>p.id!==id);persistScopePresets();if(recentPresetId()===id)localStorage.removeItem(recentPresetStorageKey);return presetsView();}
     if(action.startsWith("list-toggle-all:")){const kind=action.slice("list-toggle-all:".length) as ExpandableListKind;if(!["wrong","favorites","notes","reviews"].includes(kind))return;const rows=kind==="notes"?await noteQuestions():kind==="reviews"?await reviewQuestions():kind==="wrong"?await wrongQuestions():await favoriteQuestions();const set=expandedSet(kind);const all=rows.length>0&&rows.every(r=>set.has(r.id));all?set.clear():rows.forEach(r=>set.add(r.id));return listView(kind);}
-    if(action.startsWith("toggle-list-card:")){const rest=action.slice("toggle-list-card:".length);const split=rest.indexOf(":");if(split<0)return;const kind=rest.slice(0,split) as ExpandableListKind;const id=decodeURIComponent(rest.slice(split+1));if(!["wrong","favorites","notes","reviews"].includes(kind))return;const set=expandedSet(kind);set.has(id)?set.delete(id):set.add(id);return listView(kind);}
-    if(action.startsWith("fold:")){const id=action.slice(5);collapsedScopeNodes.has(id)?collapsedScopeNodes.delete(id):collapsedScopeNodes.add(id);saveScopeCollapseState();return scopeView();}
-    if(action==="scope-expand-all"){collapsedScopeNodes.clear();saveScopeCollapseState();return scopeView();}
-    if(action==="scope-collapse-all"){const {children}=buildScopeTree(scopeNodesCache);for(const n of scopeNodesCache)if((children.get(n.id)?.length??0)>0)collapsedScopeNodes.add(n.id);saveScopeCollapseState();return scopeView();}
-    if(action.startsWith("scope-bank-fold:")){const bankId=action.slice("scope-bank-fold:".length);const {children}=buildScopeTree(scopeNodesCache);const ids=scopeNodesCache.filter(n=>n.bank_id===bankId&&(children.get(n.id)?.length??0)>0).map(n=>n.id);const allCollapsed=ids.length>0&&ids.every(id=>collapsedScopeNodes.has(id));for(const id of ids)allCollapsed?collapsedScopeNodes.delete(id):collapsedScopeNodes.add(id);saveScopeCollapseState();return scopeView();}
-    if(action.startsWith("scope-node:")){toggleScopeNode(action.slice("scope-node:".length));return scopeView();}
-    if(action.startsWith("scope-bank:")){toggleScopeBank(action.slice("scope-bank:".length));return scopeView();}
+    if(action.startsWith("toggle-list-card:")){const rest=action.slice("toggle-list-card:".length);const split=rest.indexOf(":");if(split<0)return;const kind=rest.slice(0,split) as ExpandableListKind;const id=decodeURIComponent(rest.slice(split+1));if(!["wrong","favorites","notes","reviews"].includes(kind))return;const set=expandedSet(kind);set.has(id)?set.delete(id):set.add(id);await listView(kind);document.querySelectorAll<HTMLButtonElement>(".expandable-card-summary").forEach(button=>{if(button.dataset.action===action)button.focus({preventScroll:true});});return;}
+    if(action.startsWith("fold:")){const id=action.slice(5);collapsedScopeNodes.has(id)?collapsedScopeNodes.delete(id):collapsedScopeNodes.add(id);saveScopeCollapseState();return scopeView(action);}
+    if(action==="scope-expand-all"){collapsedScopeNodes.clear();saveScopeCollapseState();return scopeView(action);}
+    if(action==="scope-collapse-all"){const {children}=buildScopeTree(scopeNodesCache);for(const n of scopeNodesCache)if((children.get(n.id)?.length??0)>0)collapsedScopeNodes.add(n.id);saveScopeCollapseState();return scopeView(action);}
+    if(action.startsWith("scope-bank-fold:")){const bankId=action.slice("scope-bank-fold:".length);const {children}=buildScopeTree(scopeNodesCache);const ids=scopeNodesCache.filter(n=>n.bank_id===bankId&&(children.get(n.id)?.length??0)>0).map(n=>n.id);const allCollapsed=ids.length>0&&ids.every(id=>collapsedScopeNodes.has(id));for(const id of ids)allCollapsed?collapsedScopeNodes.delete(id):collapsedScopeNodes.add(id);saveScopeCollapseState();return scopeView(action);}
+    if(action.startsWith("scope-node:")){toggleScopeNode(action.slice("scope-node:".length));return scopeView(action);}
+    if(action.startsWith("scope-bank:")){toggleScopeBank(action.slice("scope-bank:".length));return scopeView(action);}
     if(action==="scope-next")return navigate({view:"choose",nodeIds:[...selectedScopeNodes]});
     if(action==="save-scope-preset"){const route=history.state as Route;const ids=route.view==="choose"?(route.nodeIds??(route.nodeId?[route.nodeId]:[])):[];return saveScopePreset(ids);}
     if(action.startsWith("start-scope:")){const mode=action.slice("start-scope:".length);const route=history.state as Route;const ids=route.view==="choose"?(route.nodeIds??(route.nodeId?[route.nodeId]:[])):[];const count=mode==="random"?Number(document.querySelector<HTMLInputElement>("#random-count")?.value||10):mode==="memorization-random"?Number(document.querySelector<HTMLInputElement>("#memorization-random-count")?.value||10):undefined;return startScope(mode,ids,count);}

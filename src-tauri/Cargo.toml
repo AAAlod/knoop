@@ -1,6 +1,6 @@
 [package]
 name = "knoop"
-version = "0.1.0"
+version = "0.1.1"
 description = "Local-first personal knowledge practice tool"
 authors = ["Knoop"]
 edition = "2021"

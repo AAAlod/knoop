@@ -80,7 +80,7 @@ header h1{display:block}
 }
 
 /* review workflow, long-press safety and deletion feedback */
-body,button,.card,.quiz,.stem,.options,.option,.answer-panel,.question-actions,.directory-list,.bank-list{
+button,.option{
   -webkit-user-select:none;
   user-select:none;
   -webkit-touch-callout:none;
@@ -178,5 +178,49 @@ input,textarea,.editor textarea,.note-editor textarea,.review-editor textarea{
 .preset-save{margin-top:12px;border-top:1px solid #ece8df;padding-top:8px}.preset-save summary{cursor:pointer;color:#666;font-size:13px;font-weight:650;padding:8px 0}.preset-save-body{display:grid;grid-template-columns:minmax(0,1fr) minmax(110px,.45fr);gap:8px 10px}.preset-save-body label{margin:0!important}.preset-save-body label:first-child{grid-column:1/-1}.preset-save-body input,.preset-save-body select{width:100%;height:42px;margin-top:5px;border:1px solid #d5d0c6;border-radius:9px;padding:8px 10px;background:#fff;color:#222}.preset-save-body button{grid-column:1/-1;min-height:42px;margin:2px 0 0!important}
 .preset-list{display:grid;gap:8px}.preset-card{margin:0;padding:12px}.preset-card-head{display:flex;align-items:center;justify-content:space-between;gap:10px}.preset-card-head>div:first-child{display:grid;gap:3px;min-width:0}.preset-card-head b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.preset-card-head span{color:#666;font-size:12px}.preset-meta{margin-top:7px;color:#777;font-size:12px}.preset-meta em{color:#a15b18;font-style:normal}
 .header-symbol{display:grid;place-items:center;width:34px;min-width:34px;min-height:32px;padding:0;border:1px solid #ddd8cd;border-radius:9px;background:#fff;box-shadow:none;color:#666;font-size:21px;line-height:1}
-.expandable-list-card{cursor:default}.expandable-card-summary,.expandable-card-detail{cursor:pointer}.expandable-card-summary{display:grid;gap:6px;margin:-2px -2px 0;padding:2px;border-radius:8px}.expandable-card-summary:active{background:#f4f1ea}.expandable-card-detail{display:grid;gap:8px;margin-top:6px;padding-top:9px;border-top:1px solid #ebe7df}.expandable-card-detail .review-question-preview{margin:0}.expanded-meta{display:grid;gap:5px;padding:9px 10px;border-radius:10px;background:#f6f4ee;color:#555;line-height:1.45;overflow-wrap:anywhere}.expanded-meta>b{font-size:12px;color:#666}.expanded-meta small{color:#888}.wrong-meta{background:#fff2ef}
+.expandable-list-card{cursor:default}.expandable-card-summary{cursor:pointer}.expandable-card-summary{display:grid;gap:6px;margin:-2px -2px 0;padding:2px;border-radius:8px}.expandable-card-summary:active{background:#f4f1ea}.expandable-card-detail{display:grid;gap:8px;margin-top:6px;padding-top:9px;border-top:1px solid #ebe7df}.expandable-card-detail .review-question-preview{margin:0}.expanded-meta{display:grid;gap:5px;padding:9px 10px;border-radius:10px;background:#f6f4ee;color:#555;line-height:1.45;overflow-wrap:anywhere}.expanded-meta>b{font-size:12px;color:#666}.expanded-meta small{color:#888}.wrong-meta{background:#fff2ef}
 @media(max-width:420px){.home-recent-preset{grid-template-columns:minmax(0,1fr) auto}.preset-save-body{grid-template-columns:1fr}.preset-save-body label:first-child,.preset-save-body button{grid-column:auto}.preset-card-head{align-items:flex-start}.preset-card-head .compact-card-actions{flex:0 0 auto}}
+
+
+/* 0.1.1: clearer study flow and readable directory entries */
+.home-heading{margin:0 2px 12px}
+.home-heading h1{margin:0;font-size:27px;line-height:1.2;color:#234f40}
+.home-heading p{margin:6px 0 0;color:#666;font-size:14px}
+.home-summary{gap:16px;margin-bottom:18px}
+.home-group{margin-top:24px}
+.home-group .section-title{margin:0 2px 10px;font-weight:700;color:#555}
+.type-filter-row{display:grid;gap:8px;margin-bottom:18px}
+.type-filter-options{display:flex;flex-wrap:wrap;gap:7px}
+.type-filter{min-height:48px;min-width:0;padding:8px 12px}
+.empty h2{margin:0 0 8px;color:#333}
+.empty p{margin:0 0 18px;line-height:1.5}
+.empty.compact button{max-width:360px;margin:20px auto 0}
+.scope-bottom>div{line-height:1.4}
+.scope-selection-summary{margin:0 0 14px;padding:11px 13px;border-radius:11px;background:#eaf2ed;color:#275d4b;font-size:14px;font-weight:650}
+.header-title{display:inline-flex;align-items:center;gap:6px;max-width:100%;min-height:48px;cursor:pointer}
+.header-title-hint{font-size:12px;font-weight:650;color:#275d4b}
+.directory-item{grid-template-columns:34px 34px minmax(0,1fr);min-height:60px}
+.directory-copy{display:grid;gap:3px;min-width:0}
+.directory-text{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;white-space:normal;overflow:hidden;text-overflow:clip;line-height:1.4}
+.directory-match{font-size:12px;color:#8a5b1f}
+.question-actions{align-items:center;justify-content:flex-start;gap:6px}
+.question-actions>button,.question-more>summary{min-height:48px;padding:10px 12px}
+.question-more{position:relative}
+.question-more>summary{display:grid;place-items:center;list-style:none;border-radius:10px;color:#555;font-size:13px;font-weight:650;cursor:pointer}
+.question-more>summary::-webkit-details-marker{display:none}
+.question-more-panel{display:flex;flex-wrap:wrap;gap:6px;padding:8px 0}
+.question-more-panel button{min-height:48px;padding:8px 12px;background:#fff;box-shadow:0 1px 4px #00000012}
+.finish-page button{max-width:360px;margin-left:auto;margin-right:auto}
+.finish-page p{margin:10px 0 18px}
+.review-preset,.review-issues label,.compact-card-actions button,.scope-toolbar .scope-fold-symbol,.bank-fold,.tree-toggle,.header-symbol,.bank-actions button,.delete-link{min-height:48px}
+.scope-toolbar .scope-fold-symbol,.bank-fold,.header-symbol{width:48px;min-width:48px}
+.tree-toggle{width:48px}
+.scope-node{grid-template-columns:48px minmax(0,1fr)}
+.expandable-card-summary{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:5px 8px;width:100%;min-height:56px;padding:8px 2px;text-align:left;background:transparent;box-shadow:none;font-weight:500}
+.expandable-card-summary .compact-card-title{min-width:0}
+.expandable-card-summary .note-preview,.expandable-card-summary .review-tags{grid-column:1/-1}
+.expandable-card-symbol{color:#275d4b;font-size:12px;white-space:nowrap}
+.compact-preview{font-size:14px}
+[hidden]{display:none!important}
+button:focus-visible,summary:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:3px solid #3a8064;outline-offset:2px}
+@media(max-width:360px){.directory-item{grid-template-columns:30px 30px minmax(0,1fr)}.question-actions{gap:2px}}
