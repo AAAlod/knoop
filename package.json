@@ -1,0 +1,24 @@
+{
+  "name": "knoop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 1420 --strictPort",
+    "build": "tsc && vite build",
+    "tauri": "tauri",
+    "check:repo": "node scripts/check-repo.mjs"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.8.0",
+    "@tauri-apps/plugin-sql": "^2.3.0",
+    "katex": "0.18.7"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.8.0",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
+    "typescript": "^5.8.3",
+    "vite": "^7.1.0"
+  }
+}

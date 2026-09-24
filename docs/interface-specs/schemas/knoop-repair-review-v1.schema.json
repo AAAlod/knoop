@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://knoop.local/schemas/knoop-repair-review-v1.schema.json",
+  "title": "Knoop Repair Review 1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "version",
+    "exportedAt",
+    "items"
+  ],
+  "properties": {
+    "format": {
+      "const": "knoop-repair-review"
+    },
+    "version": {
+      "const": "1.0"
+    },
+    "exportedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bank",
+          "node",
+          "question",
+          "review"
+        ],
+        "properties": {
+          "bank": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "title"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "node": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "title",
+              "path"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              },
+              "path": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          "question": {
+            "type": "object"
+          },
+          "review": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "issues",
+              "note",
+              "markedAt",
+              "updatedAt"
+            ],
+            "properties": {
+              "issues": {
+                "type": "array",
+                "items": {
+                  "enum": [
+                    "stem",
+                    "options",
+                    "answer",
+                    "explanation",
+                    "other"
+                  ]
+                },
+                "uniqueItems": true
+              },
+              "note": {
+                "type": "string"
+              },
+              "markedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "updatedAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "latestAttempt": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "answeredAt",
+              "userAnswer",
+              "gradingMode",
+              "isCorrect"
+            ],
+            "properties": {
+              "answeredAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "userAnswer": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                ]
+              },
+              "gradingMode": {
+                "type": "string",
+                "minLength": 1
+              },
+              "isCorrect": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

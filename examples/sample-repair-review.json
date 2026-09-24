@@ -1,0 +1,59 @@
+{
+  "format": "knoop-repair-review",
+  "version": "1.1",
+  "exportedAt": "2026-09-22T12:30:00+08:00",
+  "aiGuidance": {
+    "purpose": "检查或返修用户标记的问题题目。",
+    "firstStep": "若用户未说明处理方式，先确认是检查用户修改还是直接返修；若审核意见注明用户已修改，则默认先检查，不擅自重写。若用户已明确要求，则直接执行。",
+    "output": "直接返修原题时保持原 bankId 和 question.id，并输出 knoop-bank merge；变式题使用新 question.id。"
+  },
+  "items": [
+    {
+      "bank": {
+        "id": "demo-bank",
+        "title": "示例题库"
+      },
+      "node": {
+        "id": "root",
+        "title": "示例章节",
+        "path": [
+          "示例章节"
+        ]
+      },
+      "question": {
+        "id": "q1",
+        "nodeId": "root",
+        "type": "single_choice",
+        "order": 1,
+        "stem": "2 + 2 = ?",
+        "options": [
+          {
+            "id": "A",
+            "text": "3"
+          },
+          {
+            "id": "B",
+            "text": "4"
+          }
+        ],
+        "answer": "B",
+        "explanation": "简单加法示例。"
+      },
+      "review": {
+        "issues": [
+          "options",
+          "explanation"
+        ],
+        "note": "请检查题干表述。",
+        "markedAt": "2026-09-22T12:20:00+08:00",
+        "updatedAt": "2026-09-22T12:20:00+08:00"
+      },
+      "latestAttempt": {
+        "answeredAt": "2026-09-22T12:10:00+08:00",
+        "userAnswer": "A",
+        "gradingMode": "auto",
+        "isCorrect": false
+      }
+    }
+  ]
+}

@@ -1,0 +1,498 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://knoop.local/schemas/knoop-error-review-v1.1.schema.json",
+  "title": "Knoop Error Review 1.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "version",
+    "exportedAt",
+    "aiGuidance",
+    "scope",
+    "items"
+  ],
+  "properties": {
+    "format": {
+      "const": "knoop-error-review"
+    },
+    "version": {
+      "const": "1.1"
+    },
+    "exportedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "const": "current_wrong_questions"
+        }
+      }
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/item"
+      }
+    },
+    "aiGuidance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "purpose",
+        "firstStep",
+        "output"
+      ],
+      "properties": {
+        "purpose": {
+          "type": "string",
+          "minLength": 1
+        },
+        "firstStep": {
+          "type": "string",
+          "minLength": 1
+        },
+        "output": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  },
+  "$defs": {
+    "option": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "text"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "singleChoice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "nodeId",
+        "type",
+        "order",
+        "stem",
+        "options",
+        "answer"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "nodeId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "order": {
+          "type": "integer"
+        },
+        "explanation": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "source": {},
+        "type": {
+          "const": "single_choice"
+        },
+        "stem": {
+          "type": "string",
+          "minLength": 1
+        },
+        "options": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "$ref": "#/$defs/option"
+          }
+        },
+        "answer": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "multipleChoice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "nodeId",
+        "type",
+        "order",
+        "stem",
+        "options",
+        "answer"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "nodeId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "order": {
+          "type": "integer"
+        },
+        "explanation": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "source": {},
+        "type": {
+          "const": "multiple_choice"
+        },
+        "stem": {
+          "type": "string",
+          "minLength": 1
+        },
+        "options": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "$ref": "#/$defs/option"
+          }
+        },
+        "answer": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "blank": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "nodeId",
+        "type",
+        "order",
+        "stem",
+        "answer"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "nodeId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "order": {
+          "type": "integer"
+        },
+        "explanation": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "source": {},
+        "type": {
+          "const": "blank"
+        },
+        "stem": {
+          "type": "string",
+          "minLength": 1
+        },
+        "answer": {
+          "type": "string"
+        }
+      }
+    },
+    "bank": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "path"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "latestWrongAttempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "answeredAt",
+        "userAnswer",
+        "gradingMode"
+      ],
+      "properties": {
+        "answeredAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "userAnswer": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true
+            }
+          ]
+        },
+        "gradingMode": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "choiceDiff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "wrongSelected",
+        "missedCorrect"
+      ],
+      "properties": {
+        "wrongSelected": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "missedCorrect": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "history": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attemptCount",
+        "wrongCount"
+      ],
+      "properties": {
+        "attemptCount": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "wrongCount": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "errorBase": {
+      "type": "object",
+      "required": [
+        "latestWrongAttempt",
+        "correctAnswer",
+        "history"
+      ],
+      "properties": {
+        "latestWrongAttempt": {
+          "$ref": "#/$defs/latestWrongAttempt"
+        },
+        "correctAnswer": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true
+            }
+          ]
+        },
+        "choiceDiff": {
+          "$ref": "#/$defs/choiceDiff"
+        },
+        "history": {
+          "$ref": "#/$defs/history"
+        }
+      }
+    },
+    "item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bank",
+        "node",
+        "question",
+        "error"
+      ],
+      "properties": {
+        "bank": {
+          "$ref": "#/$defs/bank"
+        },
+        "node": {
+          "$ref": "#/$defs/node"
+        },
+        "question": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/singleChoice"
+            },
+            {
+              "$ref": "#/$defs/multipleChoice"
+            },
+            {
+              "$ref": "#/$defs/blank"
+            }
+          ]
+        },
+        "error": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/errorBase"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "question": {
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "single_choice",
+                      "multiple_choice"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "error": {
+                "required": [
+                  "choiceDiff"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "question": {
+                "properties": {
+                  "type": {
+                    "const": "blank"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "error": {
+                "not": {
+                  "required": [
+                    "choiceDiff"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "format": "knoop-bank",
+  "version": "1.1",
+  "import": {
+    "mode": "new",
+    "bankId": "demo-bank",
+    "bankTitle": "示例题库"
+  },
+  "nodes": [
+    {
+      "id": "root",
+      "parentId": null,
+      "title": "示例章节",
+      "order": 1
+    }
+  ],
+  "questions": [
+    {
+      "id": "q1",
+      "nodeId": "root",
+      "type": "single_choice",
+      "order": 1,
+      "stem": "2 + 2 = ?",
+      "options": [
+        {
+          "id": "A",
+          "text": "3"
+        },
+        {
+          "id": "B",
+          "text": "4"
+        }
+      ],
+      "answer": "B",
+      "explanation": "简单加法示例。"
+    }
+  ]
+}

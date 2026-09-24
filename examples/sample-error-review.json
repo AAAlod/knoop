@@ -1,0 +1,67 @@
+{
+  "format": "knoop-error-review",
+  "version": "1.1",
+  "exportedAt": "2026-09-21T16:30:00+08:00",
+  "aiGuidance": {
+    "purpose": "用于错因分析、原题质量检查、变式训练和定向训练。",
+    "firstStep": "若用户未说明处理目标，先确认希望进行错因分析、修订原题、生成变式题还是定向训练；若用户已明确要求，则直接执行。",
+    "output": "需要生成或修订题目时输出 knoop-bank；修订原题保持原 question.id，变式题使用新 question.id。"
+  },
+  "scope": {
+    "type": "current_wrong_questions"
+  },
+  "items": [
+    {
+      "bank": {
+        "id": "demo-bank",
+        "title": "示例题库"
+      },
+      "node": {
+        "id": "root",
+        "title": "示例章节",
+        "path": [
+          "示例章节"
+        ]
+      },
+      "question": {
+        "id": "q1",
+        "nodeId": "root",
+        "type": "single_choice",
+        "order": 1,
+        "stem": "2 + 2 = ?",
+        "options": [
+          {
+            "id": "A",
+            "text": "3"
+          },
+          {
+            "id": "B",
+            "text": "4"
+          }
+        ],
+        "answer": "B",
+        "explanation": "简单加法示例。"
+      },
+      "error": {
+        "latestWrongAttempt": {
+          "answeredAt": "2026-09-21T15:42:13+08:00",
+          "userAnswer": "A",
+          "gradingMode": "auto"
+        },
+        "correctAnswer": "B",
+        "choiceDiff": {
+          "wrongSelected": [
+            "A"
+          ],
+          "missedCorrect": [
+            "B"
+          ]
+        },
+        "history": {
+          "attemptCount": 3,
+          "wrongCount": 2
+        }
+      }
+    }
+  ]
+}
