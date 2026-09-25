@@ -85,6 +85,7 @@ type Route = ReturnTarget
 
 const esc = (s: unknown) => String(s ?? "").replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c]!));
 const button = (text: string, action: string, cls = "") => `<button class="${cls}" data-action="${esc(action)}">${esc(text)}</button>`;
+const chevronIcon = (collapsed = false) => `<svg class="chevron-icon${collapsed?" is-collapsed":""}" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m5 9 7 7 7-7"/></svg>`;
 const graded = (q: QuestionRow | QuestionInput) => q.type === "single_choice" || q.type === "multiple_choice" || q.type === "blank";
 const brushTypes = ["single_choice","multiple_choice","blank","recall"] as const;
 type BrushType = typeof brushTypes[number];
@@ -344,7 +345,7 @@ async function scopeView(focusAction = "") {
     const kids = children.get(n.id) ?? []; const state = stateFor(coverageIds(n.id)); const collapsed = collapsedScopeNodes.has(n.id);
     const descendants = !collapsed ? kids.map(c => renderNode(c, depth+1)).join("") : "";
     return `<div class="scope-node" style="--depth:${depth}">
-      ${kids.length ? `<button class="tree-toggle" data-action="fold:${esc(n.id)}" aria-label="${collapsed ? "展开" : "折叠"}">${collapsed ? "›" : "⌄"}</button>` : `<span class="tree-toggle placeholder"></span>`}
+      ${kids.length ? `<button class="tree-toggle" data-action="fold:${esc(n.id)}" aria-label="${collapsed ? "展开" : "折叠"}" aria-expanded="${!collapsed}">${chevronIcon(collapsed)}</button>` : `<span class="tree-toggle placeholder"></span>`}
       <label class="scope-check"><input type="checkbox" data-scope-check="${esc(n.id)}" data-action="scope-node:${esc(n.id)}" ${state.checked ? "checked" : ""}><span>${esc(n.title)}</span></label>
     </div>${descendants}`;
   };
@@ -355,13 +356,13 @@ async function scopeView(focusAction = "") {
     const state = stateFor(bankCoverage.length ? bankCoverage : bankNodes.map(n => n.id));
     const bankCollapsible = bankNodes.filter(n => collapsibleIds.has(n.id)).map(n => n.id);
     const allCollapsed = bankCollapsible.length > 0 && bankCollapsible.every(id => collapsedScopeNodes.has(id));
-    return `<section class="scope-bank"><div class="bank-heading"><label class="scope-check bank-check"><input type="checkbox" data-bank-check="${esc(b.id)}" data-action="scope-bank:${esc(b.id)}" ${state.checked ? "checked" : ""}><span class="bank-heading-text"><b>${esc(b.title)}</b><small>更新 ${esc(formatUpdatedAt(b.updated_at))}</small></span></label>${bankCollapsible.length?`<button class="bank-fold" data-action="scope-bank-fold:${esc(b.id)}" aria-label="${allCollapsed?"展开此题库":"折叠此题库"}" title="${allCollapsed?"展开此题库":"折叠此题库"}">${allCollapsed?"›":"⌄"}</button>`:""}</div>${roots.map(n => renderNode(n)).join("")}</section>`;
+    return `<section class="scope-bank"><div class="bank-heading"><label class="scope-check bank-check"><input type="checkbox" data-bank-check="${esc(b.id)}" data-action="scope-bank:${esc(b.id)}" ${state.checked ? "checked" : ""}><span class="bank-heading-text"><b>${esc(b.title)}</b><small>更新 ${esc(formatUpdatedAt(b.updated_at))}</small></span></label>${bankCollapsible.length?`<button class="bank-fold" data-action="scope-bank-fold:${esc(b.id)}" aria-label="${allCollapsed?"展开此题库":"折叠此题库"}" title="${allCollapsed?"展开此题库":"折叠此题库"}" aria-expanded="${!allCollapsed}">${chevronIcon(allCollapsed)}</button>`:""}</div>${roots.map(n => renderNode(n)).join("")}</section>`;
   };
   const selectedCount = selectedScopeNodes.size;
   const selectedRows = allQuestions.filter(q => selectedScopeNodes.has(q.node_id));
   const brushCount = selectedRows.filter(isEnabledBrush).length;
   const memorizationCount = selectedRows.filter(q => q.type === "memorization").length;
-  const toolbar = banks.length ? `<div class="scope-toolbar"><button class="scope-fold-symbol" data-action="scope-expand-all" aria-label="全部展开" title="全部展开">⌄</button><button class="scope-fold-symbol" data-action="scope-collapse-all" aria-label="全部折叠" title="全部折叠">›</button></div>` : "";
+  const toolbar = banks.length ? `<div class="scope-toolbar"><button data-action="scope-expand-all" aria-label="全部展开" title="全部展开">${chevronIcon()}</button><button data-action="scope-collapse-all" aria-label="全部折叠" title="全部折叠">${chevronIcon(true)}</button></div>` : "";
   shell("选择范围", banks.length ? `${toolbar}${banks.map(renderBank).join("")}<div class="scope-bottom"><div><b>${selectedCount}</b> 个范围 · 可刷 ${brushCount} 题 · 可背 ${memorizationCount} 项</div><button class="primary" data-action="scope-next" ${selectedCount ? "" : "disabled"}>下一步</button></div>` : `<div class="empty">还没有题库。${button("去导入", "import", "primary")}</div>`);
   for (const input of document.querySelectorAll<HTMLInputElement>("[data-scope-check]")) { const id = input.dataset.scopeCheck!; const state = stateFor(coverageIds(id)); input.indeterminate = state.partial; }
   for (const input of document.querySelectorAll<HTMLInputElement>("[data-bank-check]")) {
@@ -582,7 +583,7 @@ async function quizView(){
   else bottom=`<button class="primary" data-action="submit" ${canSubmit?"":"disabled"}>提交答案</button>`;
   const quickAvailable=["sequential","random","recall","memorization"].includes(activeSession.mode);
   const quickButton=quickAvailable?`<button class="header-action ${quickMode?"active":""}" data-action="toggle-quick" aria-pressed="${quickMode}">快刷${quickMode?"✓":""}</button>`:"";
-  shell(progress,`<article class="quiz">${content}</article><div class="question-actions"><button data-action="favorite:${esc(row.id)}">${fav?"★ 已收藏":"☆ 收藏"}</button><button class="${note?"note-active":""}" data-action="note:${esc(row.id)}">${note?"● 笔记":"笔记"}</button><details class="question-more"><summary>更多操作</summary><div class="question-more-panel"><button class="${killed?"kill-active":""}" data-action="kill:${esc(row.id)}" ${reviewed?"disabled":""}>${reviewed?"已斩杀":killed?"恢复":"斩杀"}</button><button class="${reviewed?"review-active":""}" data-action="review:${esc(row.id)}">${reviewed?"● 待返修":"审核"}</button><button data-action="edit:${esc(row.id)}">编辑</button></div></details></div>${bottom?`<div class="bottom-actions">${bottom}</div>`:""}`,true,quickButton,"session-directory");
+  shell(progress,`<article class="quiz">${content}</article><div class="question-actions"><button data-action="favorite:${esc(row.id)}">${fav?"★ 已收藏":"☆ 收藏"}</button><button class="${killed?"kill-active":""}" data-action="kill:${esc(row.id)}" ${reviewed?"disabled":""}>${reviewed?"已斩杀":killed?"恢复":"斩杀"}</button><button class="${reviewed?"review-active":""}" data-action="review:${esc(row.id)}">${reviewed?"● 待返修":"审核"}</button><button class="${note?"note-active":""}" data-action="note:${esc(row.id)}">${note?"● 笔记":"笔记"}</button><button data-action="edit:${esc(row.id)}">编辑</button></div>${bottom?`<div class="bottom-actions">${bottom}</div>`:""}`,true,quickButton,"session-directory");
   const blank=document.querySelector<HTMLInputElement>("#blank"); if(blank) blank.oninput=()=>{blankValue=blank.value; const submit=document.querySelector<HTMLButtonElement>('[data-action="submit"]'); if(submit)submit.disabled=!blankValue.trim(); void persistDraft();};
   bindOptionLongPress();
 }
@@ -759,11 +760,11 @@ function expandableQuestionDetail(q:QuestionInput): string {
 function listCardAction(kind:ExpandableListKind,id:string): string { return `toggle-list-card:${kind}:${encodeURIComponent(id)}`; }
 function listHeaderToggle(kind:ExpandableListKind,ids:string[]): string {
   const set=expandedSet(kind), all=ids.length>0&&ids.every(id=>set.has(id));
-  return `<button class="header-symbol" data-action="list-toggle-all:${kind}" aria-label="${all?"全部收起":"全部展开"}" title="${all?"全部收起":"全部展开"}">${all?"⌃":"⌄"}</button>`;
+  return `<button class="header-symbol" data-action="list-toggle-all:${kind}" aria-label="${all?"全部收起":"全部展开"}" title="${all?"全部收起":"全部展开"}">${chevronIcon(all)}</button>`;
 }
 function expandableCard(kind:ExpandableListKind,row:QuestionRow,summaryExtra:string,actions:string,expandedExtra:string): string {
   const q=parseQuestion(row), expanded=expandedSet(kind).has(row.id), action=listCardAction(kind,row.id);
-  return `<div class="card compact-list-card expandable-list-card ${expanded?"expanded":""}"><div class="compact-card-head"><span class="type">${questionTypeLabel(q)}</span><div class="compact-card-actions">${actions}</div></div><button class="expandable-card-summary" data-action="${action}" aria-expanded="${expanded}"><span class="compact-card-title multiline">${esc(questionLead(q))}</span><span class="expandable-card-symbol" aria-hidden="true">${expanded?"收起 ⌃":"展开 ⌄"}</span>${summaryExtra}</button>${expanded?`<div class="expandable-card-detail">${expandableQuestionDetail(q)}${expandedExtra}</div>`:""}</div>`;
+  return `<div class="card compact-list-card expandable-list-card ${expanded?"expanded":""}"><div class="compact-card-head"><span class="type">${questionTypeLabel(q)}</span><div class="compact-card-actions">${actions}</div></div><button class="expandable-card-summary" data-action="${action}" aria-expanded="${expanded}" aria-label="${expanded?"收起":"展开"}：${esc(questionLead(q))}"><span class="compact-card-title multiline">${esc(questionLead(q))}</span><span class="expandable-card-symbol" aria-hidden="true">${chevronIcon(!expanded)}</span>${summaryExtra}</button>${expanded?`<div class="expandable-card-detail">${expandableQuestionDetail(q)}${expandedExtra}</div>`:""}</div>`;
 }
 async function listView(kind:ListKind) {
   if(kind==="killed"){const rows=await killedQuestions();return shell("已斩杀",rows.length?`<div class="question-list">${rows.map(r=>{const q=parseQuestion(r);return `<div class="card"><span class="type">${questionTypeLabel(q)}</span><p class="multiline">${esc(questionLead(q))}</p><button data-action="restore-killed:${esc(r.id)}">恢复</button></div>`}).join("")}</div>`:`<div class="empty">暂无已斩杀题目</div>`);}
@@ -864,8 +865,7 @@ app.addEventListener("click",async e=>{const target=(e.target as HTMLElement).cl
       if(q.type==="single_choice"){
         selection=new Set([id]); if(quickMode){const correct=id===q.answer;return record(activeRows[activeSession!.current_index].id,[id],"auto",correct);}
       } else if(q.type==="multiple_choice") {
-        const wasSelected=selection.has(id); wasSelected?selection.delete(id):selection.add(id);
-        if(quickMode&&!wasSelected){ const expected=q.answer as string[]; if(!expected.includes(id))return record(activeRows[activeSession!.current_index].id,[...selection],"auto",false); const got=[...selection].sort(); const want=[...expected].sort(); if(JSON.stringify(got)===JSON.stringify(want))return record(activeRows[activeSession!.current_index].id,got,"auto",true); }
+        selection.has(id)?selection.delete(id):selection.add(id);
       }
       await persistDraft();return quizView();
     }

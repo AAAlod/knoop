@@ -204,12 +204,7 @@ input,textarea,.editor textarea,.note-editor textarea,.review-editor textarea{
 .directory-text{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;white-space:normal;overflow:hidden;text-overflow:clip;line-height:1.4}
 .directory-match{font-size:12px;color:#8a5b1f}
 .question-actions{align-items:center;justify-content:flex-start;gap:6px}
-.question-actions>button,.question-more>summary{min-height:48px;padding:10px 12px}
-.question-more{position:relative}
-.question-more>summary{display:grid;place-items:center;list-style:none;border-radius:10px;color:#555;font-size:13px;font-weight:650;cursor:pointer}
-.question-more>summary::-webkit-details-marker{display:none}
-.question-more-panel{display:flex;flex-wrap:wrap;gap:6px;padding:8px 0}
-.question-more-panel button{min-height:48px;padding:8px 12px;background:#fff;box-shadow:0 1px 4px #00000012}
+.question-actions>button{min-height:48px;padding:10px 12px}
 .finish-page button{max-width:360px;margin-left:auto;margin-right:auto}
 .finish-page p{margin:10px 0 18px}
 .review-preset,.review-issues label,.compact-card-actions button,.scope-toolbar .scope-fold-symbol,.bank-fold,.tree-toggle,.header-symbol,.bank-actions button,.delete-link{min-height:48px}
@@ -224,3 +219,13 @@ input,textarea,.editor textarea,.note-editor textarea,.review-editor textarea{
 [hidden]{display:none!important}
 button:focus-visible,summary:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:3px solid #3a8064;outline-offset:2px}
 @media(max-width:360px){.directory-item{grid-template-columns:30px 30px minmax(0,1fr)}.question-actions{gap:2px}}
+
+
+/* 0.1.2: one centered arrow, with an invisible 48px touch target */
+.chevron-icon{display:block;width:22px;height:22px;margin:auto;fill:none;stroke:currentColor;stroke-width:2.25;stroke-linecap:round;stroke-linejoin:round;transform-origin:50% 50%}
+.chevron-icon.is-collapsed{transform:rotate(-90deg)}
+.scope-toolbar button,.bank-fold,.tree-toggle,.header-symbol{display:grid;place-items:center;width:48px;min-width:48px;min-height:48px;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none;color:#555}
+.scope-toolbar button:hover,.bank-fold:hover,.tree-toggle:hover,.header-symbol:hover{background:transparent}
+.expandable-card-symbol{display:grid;place-items:center;width:24px;height:24px}
+.expandable-card-symbol .chevron-icon{width:18px;height:18px}
+.question-actions>button{border:1px solid #e4e0d6;border-radius:10px;background:#fff}
