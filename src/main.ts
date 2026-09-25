@@ -152,6 +152,19 @@ function shell(title: string, body: string, back = true, right = "", titleAction
   renderMath();
 }
 function message(text: string, kind: "ok"|"error" = "ok") { const el = document.querySelector("#message"); if (el) { el.className = `message ${kind}`; el.textContent = text; } }
+let toastTimer: number | undefined;
+function notify(text: string, kind: "ok"|"error" = "error"): void {
+  let toast=document.querySelector<HTMLElement>("#app-toast");
+  if(!toast){toast=document.createElement("div");toast.id="app-toast";document.body.appendChild(toast);}
+  toast.className=`app-toast ${kind}`; toast.textContent=text;
+  toast.setAttribute("role",kind==="error"?"alert":"status");
+  toast.hidden=false;
+  window.clearTimeout(toastTimer);
+  toastTimer=window.setTimeout(()=>{toast!.hidden=true;},4000);
+}
+function emptyState(title: string, description: string, action?: {text:string;id:string}): string {
+  return `<div class="empty compact"><h2>${esc(title)}</h2><p>${esc(description)}</p>${action?button(action.text,action.id,"primary"):""}</div>`;
+}
 
 function isReturnTarget(value: unknown): value is ReturnTarget {
   if (!value || typeof value !== "object") return false;
@@ -264,7 +277,7 @@ async function importView() {
     </div>`).join("");
   shell("题库管理", `<input id="file" class="visually-hidden-file" type="file" accept="application/json,.json" multiple>
     <div id="message" class="message"></div>
-    ${banks.length ? `<section><h2 class="section-title">已导入题库</h2>${exportToolbar}<div class="bank-list">${rows}</div></section>` : `<div class="empty compact"><h2>还没有题库</h2><p>导入 Knoop JSON 题库后，就可以选择范围开始学习。</p>${button("导入题库","pick-import","primary")}</div>`}
+    ${banks.length ? `<section><h2 class="section-title">已导入题库</h2>${exportToolbar}<div class="bank-list">${rows}</div></section>` : `${emptyState("还没有题库","导入 Knoop JSON 题库后，就可以选择范围开始学习。",{text:"导入题库",id:"pick-import"})}`}
     ${killed.length ? `<section><h2 class="section-title">题目管理</h2>${button(`已斩杀 ${killed.length} 题`,"killed")}</section>`:""}`,
     true,
     `<button class="header-action" data-action="pick-import">导入</button>`);
@@ -362,14 +375,16 @@ async function scopeView(focusAction = "") {
   const selectedRows = allQuestions.filter(q => selectedScopeNodes.has(q.node_id));
   const brushCount = selectedRows.filter(isEnabledBrush).length;
   const memorizationCount = selectedRows.filter(q => q.type === "memorization").length;
-  const toolbar = banks.length ? `<div class="scope-toolbar"><button data-action="scope-expand-all" aria-label="全部展开" title="全部展开">${chevronIcon()}</button><button data-action="scope-collapse-all" aria-label="全部折叠" title="全部折叠">${chevronIcon(true)}</button></div>` : "";
-  shell("选择范围", banks.length ? `${toolbar}${banks.map(renderBank).join("")}<div class="scope-bottom"><div><b>${selectedCount}</b> 个范围 · 可刷 ${brushCount} 题 · 可背 ${memorizationCount} 项</div><button class="primary" data-action="scope-next" ${selectedCount ? "" : "disabled"}>下一步</button></div>` : `<div class="empty">还没有题库。${button("去导入", "import", "primary")}</div>`);
+  const allExpanded = collapsibleIds.size > 0 && [...collapsibleIds].every(id => !collapsedScopeNodes.has(id));
+  const foldAll = collapsibleIds.size ? `<button class="header-symbol" data-action="${allExpanded?"scope-collapse-all":"scope-expand-all"}" aria-label="${allExpanded?"全部折叠":"全部展开"}" title="${allExpanded?"全部折叠":"全部展开"}">${chevronIcon(allExpanded)}</button>` : "";
+  shell("选择范围", banks.length ? `${banks.map(renderBank).join("")}<div class="scope-bottom"><div><b>${selectedCount}</b> 个范围 · 可刷 ${brushCount} 题 · 可背 ${memorizationCount} 项</div><button class="primary" data-action="scope-next" ${selectedCount ? "" : "disabled"}>下一步</button></div>` : `${emptyState("还没有题库","导入题库后即可选择范围。",{text:"去导入",id:"import"})}`, true, foldAll);
   for (const input of document.querySelectorAll<HTMLInputElement>("[data-scope-check]")) { const id = input.dataset.scopeCheck!; const state = stateFor(coverageIds(id)); input.indeterminate = state.partial; }
   for (const input of document.querySelectorAll<HTMLInputElement>("[data-bank-check]")) {
     const bankId=input.dataset.bankCheck!; const roots=(children.get(null)??[]).filter(n=>n.bank_id===bankId);
     const ids=[...new Set(roots.flatMap(r=>coverageIds(r.id)))]; input.indeterminate = stateFor(ids).partial;
   }
-  if(focusAction)document.querySelectorAll<HTMLElement>("[data-action]").forEach(element=>{if(element.dataset.action===focusAction)element.focus({preventScroll:true});});
+  if(focusAction==="scope-expand-all"||focusAction==="scope-collapse-all")document.querySelector<HTMLButtonElement>(".header-symbol")?.focus({preventScroll:true});
+  else if(focusAction)document.querySelectorAll<HTMLElement>("[data-action]").forEach(element=>{if(element.dataset.action===focusAction)element.focus({preventScroll:true});});
 }
 function scopeCoverageIds(nodeId: string): string[] {
   const { children } = buildScopeTree(scopeNodesCache); const out:string[]=[];
@@ -392,34 +407,34 @@ function questionLead(q: QuestionInput): string {
   return String(q.stem ?? q.front ?? q.prompt ?? "").split(/\r?\n/)[0].trim() || "（无标题）";
 }
 function questionTypeLabel(q: QuestionInput): string {
-  return q.type==="single_choice"?"单":q.type==="multiple_choice"?"多":q.type==="blank"?"填":q.type==="recall"?"卡":"背";
+  return q.type==="single_choice"?"单选":q.type==="multiple_choice"?"多选":q.type==="blank"?"填空":q.type==="recall"?"背诵卡":"背诵";
 }
 function reviewQuestionPreview(q: QuestionInput): string {
   const explain = `<div class="review-preview-section"><b>解析</b><div class="multiline">${q.explanation ? esc(q.explanation) : "无解析"}</div></div>`;
   if (q.type === "single_choice" || q.type === "multiple_choice") {
     const answerIds = new Set(Array.isArray(q.answer) ? q.answer : [String(q.answer ?? "")]);
-    const options = (q.options ?? []).map(o => `<div class="review-preview-option ${answerIds.has(o.id)?"correct":""}"><b>${esc(o.id)}</b><span class="multiline">${esc(o.text)}</span>${answerIds.has(o.id)?`<em>正确</em>`:""}</div>`).join("");
-    return `<div class="review-question-preview"><div class="review-preview-head"><span class="type">${questionTypeLabel(q)}</span><span>${q.type==="single_choice"?"单选题":"多选题"}</span></div><div class="review-preview-section"><b>题干</b><div class="multiline">${esc(q.stem)}</div></div><div class="review-preview-options">${options}</div><div class="review-preview-section"><b>正确答案</b><div class="multiline">${esc(answerText(q))}</div></div>${explain}</div>`;
+    const options = (q.options ?? []).map(o => `<div class="review-preview-option ${answerIds.has(o.id)?"correct":""}"><b>${esc(o.id)}</b><span class="multiline">${esc(o.text)}</span></div>`).join("");
+    return `<div class="review-question-preview"><div class="review-preview-head"><span class="type">${questionTypeLabel(q)}</span></div><div class="review-preview-section"><b>题干</b><div class="multiline">${esc(q.stem)}</div></div><div class="review-preview-options">${options}</div>${explain}</div>`;
   }
-  if (q.type === "blank") return `<div class="review-question-preview"><div class="review-preview-head"><span class="type">填</span><span>填空题</span></div><div class="review-preview-section"><b>题干</b><div class="multiline">${esc(q.stem)}</div></div><div class="review-preview-section"><b>标准答案</b><div class="multiline">${esc(String(q.answer ?? ""))}</div></div>${explain}</div>`;
-  if (q.type === "recall") return `<div class="review-question-preview"><div class="review-preview-head"><span class="type">卡</span><span>背诵卡</span></div><div class="review-preview-section"><b>正面</b><div class="multiline">${esc(q.front)}</div></div><div class="review-preview-section"><b>背面</b><div class="multiline">${esc(q.back)}</div></div>${explain}</div>`;
+  if (q.type === "blank") return `<div class="review-question-preview"><div class="review-preview-head"><span class="type">${questionTypeLabel(q)}</span></div><div class="review-preview-section"><b>题干</b><div class="multiline">${esc(q.stem)}</div></div><div class="review-preview-section"><b>标准答案</b><div class="multiline">${esc(String(q.answer ?? ""))}</div></div>${explain}</div>`;
+  if (q.type === "recall") return `<div class="review-question-preview"><div class="review-preview-head"><span class="type">${questionTypeLabel(q)}</span></div><div class="review-preview-section"><b>正面</b><div class="multiline">${esc(q.front)}</div></div><div class="review-preview-section"><b>背面</b><div class="multiline">${esc(q.back)}</div></div>${explain}</div>`;
   const keyPoints = q.keyPoints?.length ? `<div class="review-preview-section"><b>要点</b><ul>${q.keyPoints.map(x=>`<li class="multiline">${esc(x)}</li>`).join("")}</ul></div>` : "";
-  return `<div class="review-question-preview"><div class="review-preview-head"><span class="type">背</span><span>背诵材料</span></div><div class="review-preview-section"><b>提示</b><div class="multiline">${esc(q.prompt)}</div></div><div class="review-preview-section"><b>内容</b><div class="multiline">${esc(q.content)}</div></div>${keyPoints}${explain}</div>`;
+  return `<div class="review-question-preview"><div class="review-preview-head"><span class="type">${questionTypeLabel(q)}</span></div><div class="review-preview-section"><b>提示</b><div class="multiline">${esc(q.prompt)}</div></div><div class="review-preview-section"><b>内容</b><div class="multiline">${esc(q.content)}</div></div>${keyPoints}${explain}</div>`;
 }
 
 function presetId(): string { return `preset-${crypto.randomUUID()}`; }
 function validPresetTypes(types: BrushType[]): BrushType[] { return types.filter(t=>brushTypes.includes(t)); }
 async function saveScopePreset(nodeIds: string[]): Promise<void> {
   const name=(document.querySelector<HTMLInputElement>("#preset-name")?.value??"").trim();
-  if(!name){alert("请输入常用组题名称");return;}
+  if(!name){notify("请输入常用组题名称");return;}
   const mode=(document.querySelector<HTMLSelectElement>("#preset-mode")?.value??"random") as PresetMode;
-  if(mode!=="sequential"&&mode!=="random"){alert("组题方式无效");return;}
+  if(mode!=="sequential"&&mode!=="random"){notify("组题方式无效");return;}
   const types=validPresetTypes([...enabledBrushTypes]);
-  if(!types.length){alert("请至少启用一种刷题题型");return;}
+  if(!types.length){notify("请至少启用一种刷题题型");return;}
   const rawCount=Number(document.querySelector<HTMLInputElement>("#preset-count")?.value||0);
   const count=mode==="random"?Math.max(1,Math.trunc(rawCount||1)):undefined;
   const nodes=await getNodes(), questions=await getQuestions(), contentNodes=new Set(questions.map(q=>q.node_id));
-  const ranges=compressPresetRanges([...new Set(nodeIds)],nodes,contentNodes); if(!ranges.length){alert("当前范围没有可保存的有效题目节点");return;}
+  const ranges=compressPresetRanges([...new Set(nodeIds)],nodes,contentNodes); if(!ranges.length){notify("当前范围没有可保存的有效题目节点");return;}
   const stamp=new Date().toISOString();
   scopePresets=[...scopePresets,{id:presetId(),name,ranges,types,mode,count,createdAt:stamp,updatedAt:stamp}];
   persistScopePresets();
@@ -431,16 +446,16 @@ async function saveScopePreset(nodeIds: string[]): Promise<void> {
   if(countInput)countInput.value=countInput.dataset.defaultValue??countInput.value;
   const details=document.querySelector<HTMLDetailsElement>("details.preset-save");
   if(details)details.open=false;
-  alert(`已保存常用组题：${name}`);
+  notify(`已保存常用组题：${name}`,"ok");
 }
 async function startPresetById(id:string): Promise<void> {
-  const preset=scopePresets.find(p=>p.id===id); if(!preset){alert("常用组题不存在或已删除");return;}
+  const preset=scopePresets.find(p=>p.id===id); if(!preset){notify("常用组题不存在或已删除");return;}
   const nodes=await getNodes(), allQuestions=await getQuestions(), contentNodes=new Set(allQuestions.map(q=>q.node_id));
   const validNodeIds=expandPresetRanges(preset.ranges,nodes,contentNodes);
-  if(!validNodeIds.length){alert("这个常用组题引用的范围已全部失效，请重新保存范围");return;}
+  if(!validNodeIds.length){notify("这个常用组题引用的范围已全部失效，请重新保存范围");return;}
   let rows=(await questionsForScope(validNodeIds)).filter(q=>preset.types.includes(q.type as BrushType));
   if(preset.mode==="random") rows=shuffled(rows).slice(0,Math.min(preset.count??rows.length,rows.length));
-  if(!rows.length){alert("当前题库中没有符合这个常用组题的可用题目");return;}
+  if(!rows.length){notify("当前题库中没有符合这个常用组题的可用题目");return;}
   setRecentPreset(preset.id);
   const sessionId=await createSession(preset.mode,{source:"preset",presetId:preset.id,ranges:preset.ranges,nodeIds:validNodeIds,types:preset.types,order:preset.mode,count:preset.mode==="random"?preset.count:undefined},rows.map(q=>q.id));
   await navigate({view:"session",id:sessionId});
@@ -448,11 +463,11 @@ async function startPresetById(id:string): Promise<void> {
 async function presetsView(): Promise<void> {
   const allNodes=await getNodes(); const valid=new Set(allNodes.map(n=>n.id));
   const cards=scopePresets.map(p=>{const validCount=p.ranges.filter(r=>valid.has(r.nodeId)).length;const invalid=p.ranges.length-validCount;return `<div class="card preset-card"><div class="preset-card-head"><div><b>${esc(p.name)}</b><span>${esc(presetSummary(p))}</span></div><div class="compact-card-actions"><button data-action="start-preset:${esc(p.id)}">开始</button><button class="delete-link" data-action="delete-preset:${esc(p.id)}">删除</button></div></div><div class="preset-meta">范围节点 ${validCount}${invalid?` · <em>失效 ${invalid}</em>`:""}</div></div>`}).join("");
-  shell("常用组题",scopePresets.length?`<div class="preset-list">${cards}</div>`:`<div class="empty">暂无常用组题，可在选择范围后的模式页保存</div>`);
+  shell("常用组题",scopePresets.length?`<div class="preset-list">${cards}</div>`:`${emptyState("暂无常用组题","选择范围后，可在模式页保存常用组题。",{text:"去学习",id:"scope"})}`);
 }
 
 async function chooseScope(nodeIds: string[]) {
-  if (!nodeIds.length) { alert("请至少选择一个范围"); return navigate({view:"scope"}, true); }
+  if (!nodeIds.length) { notify("请至少选择一个范围"); return navigate({view:"scope"}, true); }
   const rows = await questionsForScope(nodeIds);
   const answerable = rows.filter(isEnabledBrush); const memorization = rows.filter(q=>q.type==="memorization");
   const activeNames = brushTypes.filter(t=>enabledBrushTypes.has(t)).map(t=>brushLabels[t]).join(" / ") || "无";
@@ -474,7 +489,7 @@ async function chooseScope(nodeIds: string[]) {
     ${button("随机背诵","start-scope:memorization-random")}
     ${button("背诵目录","open-directory:memorization")}
   </section>` : "";
-  shell("选择模式", `<p class="scope-selection-summary">当前范围：可刷 ${answerable.length} 题 · 可背 ${memorization.length} 项</p>` + (brushCard+memoCard || `<div class="empty">当前范围没有符合筛选条件的内容</div>`));
+  shell("选择模式", `<p class="scope-selection-summary">当前范围：可刷 ${answerable.length} 题 · 可背 ${memorization.length} 项</p>` + (brushCard+memoCard || `${emptyState("当前范围没有可用内容","请调整题型筛选或重新选择范围。",{text:"重新选择范围",id:"scope"})}`));
 }
 
 async function startScope(mode:string,nodeIds:string[],count?:number) {
@@ -488,7 +503,7 @@ async function startScope(mode:string,nodeIds:string[],count?:number) {
     rows = rows.filter(isEnabledBrush);
     if(mode==="random"){rows=shuffled(rows).slice(0,count??rows.length);order="random";}
   }
-  if(!rows.length){ alert("此范围没有可用内容"); return; }
+  if(!rows.length){ notify("此范围没有可用内容"); return; }
   const id=await createSession(sessionMode,{nodeIds,order},rows.map(q=>q.id)); await navigate({ view: "session", id });
 }
 async function startRows(mode:string,rows:QuestionRow[]){ if(!rows.length)return; const id=await createSession(mode,{source:mode},rows.map(q=>q.id)); await navigate({ view: "session", id }); }
@@ -516,7 +531,7 @@ function directoryMatchLocation(q:QuestionInput,query:string):string {
   return fields.find(([,value])=>terms.some(term=>value.toLocaleLowerCase().includes(term)))?.[0]??"";
 }
 function directoryListHtml(entries:Array<{row:QuestionRow;index:number}>,sessionId?:string,currentIndex=-1,query=""):string {
-  if(!entries.length)return `<div class="empty compact">没有匹配内容</div>`;
+  if(!entries.length)return `${emptyState("没有匹配内容","试试其他关键词。")}`;
   return entries.map(({row:r,index:i})=>{const q=parseQuestion(r), location=directoryMatchLocation(q,query);return `<button class="directory-item ${i===currentIndex?"current":""}" data-action="${sessionId?`jump-session:${i}`:`start-directory:${i}`}"><b>${i+1}</b><span class="type">${questionTypeLabel(q)}</span><span class="directory-copy"><span class="directory-text">${esc(questionLead(q))}</span>${location?`<small class="directory-match">命中${esc(location)}</small>`:""}</span></button>`}).join("");
 }
 function directorySearchActionsHtml(route: Extract<Route,{view:"directory"}>, count:number):string {
@@ -527,7 +542,7 @@ function directorySearchActionsHtml(route: Extract<Route,{view:"directory"}>, co
 async function directoryView(route: Extract<Route,{view:"directory"}>) {
   let rows: QuestionRow[]=[]; let title="题目目录"; let currentIndex=-1;
   if(route.sessionId){
-    const session=await sessionById(route.sessionId); if(!session){alert("学习进度不存在");return goBack();}
+    const session=await sessionById(route.sessionId); if(!session){notify("学习进度不存在");return goBack();}
     const ids=JSON.parse(session.question_ids_json) as string[]; const found=await getQuestions(ids); const byId=new Map(found.map(r=>[r.id,r]));
     rows=ids.map(id=>byId.get(id)).filter(Boolean) as QuestionRow[]; currentIndex=session.current_index;
     title=session.mode==="memorization"?"背诵目录":"题目目录";
@@ -535,7 +550,7 @@ async function directoryView(route: Extract<Route,{view:"directory"}>) {
     const all=await questionsForScope(route.nodeIds??[]); rows=route.kind==="memorization"?all.filter(q=>q.type==="memorization"):all.filter(isEnabledBrush);
     title=route.kind==="memorization"?"背诵目录":"题目目录";
   }
-  if(!rows.length){return shell(title,`<div class="empty">没有可定位的内容</div>`);}
+  if(!rows.length){return shell(title,`${emptyState("没有可定位的内容","请重新选择学习范围。",{text:"去学习",id:"scope"})}`);}
   const query=route.query??""; const entries=directoryEntries(rows,query);
   shell(title,`<div class="directory-search"><input id="directory-search" type="search" placeholder="搜索题干、选项、答案、解析、标签" value="${esc(query)}"><span id="directory-search-count">${query.trim()?`找到 ${entries.length} / ${rows.length}`:`共 ${rows.length} 项`}</span></div><div id="directory-search-actions">${directorySearchActionsHtml(route,entries.length)}</div><div class="directory-jump"><input id="directory-index" type="number" min="1" max="${rows.length}" value="${Math.max(1,currentIndex+1)}" inputmode="numeric"><button data-action="directory-go">前往题号</button></div><div id="directory-list" class="directory-list">${directoryListHtml(entries,route.sessionId,currentIndex,query)}</div>`);
   const search=document.querySelector<HTMLInputElement>("#directory-search");
@@ -577,19 +592,19 @@ async function quizView(){
   const canSubmit=q.type==="blank"?!!blankValue.trim():selection.size>0;
   let bottom="";
   if(q.type==="recall"||q.type==="memorization") bottom=shown?button(index+1===activeRows.length?"完成":"下一项","next","primary"):"";
-  else if(pageState.pendingManual) bottom=`${button("判为错误","manual:false","danger")}${button("判为正确","manual:true","primary")}`;
+  else if(pageState.pendingManual) bottom=`${button("判为错误","manual:false","grading-wrong")}${button("判为正确","manual:true","primary")}`;
   else if(pageState.submitted) bottom=button(index+1===activeRows.length?"完成":"下一题","next","primary");
   else if(quickMode && q.type==="single_choice") bottom="";
   else bottom=`<button class="primary" data-action="submit" ${canSubmit?"":"disabled"}>提交答案</button>`;
   const quickAvailable=["sequential","random","recall","memorization"].includes(activeSession.mode);
   const quickButton=quickAvailable?`<button class="header-action ${quickMode?"active":""}" data-action="toggle-quick" aria-pressed="${quickMode}">快刷${quickMode?"✓":""}</button>`:"";
-  shell(progress,`<article class="quiz">${content}</article><div class="question-actions"><button data-action="favorite:${esc(row.id)}">${fav?"★ 已收藏":"☆ 收藏"}</button><button class="${killed?"kill-active":""}" data-action="kill:${esc(row.id)}" ${reviewed?"disabled":""}>${reviewed?"已斩杀":killed?"恢复":"斩杀"}</button><button class="${reviewed?"review-active":""}" data-action="review:${esc(row.id)}">${reviewed?"● 待返修":"审核"}</button><button class="${note?"note-active":""}" data-action="note:${esc(row.id)}">${note?"● 笔记":"笔记"}</button><button data-action="edit:${esc(row.id)}">编辑</button></div>${bottom?`<div class="bottom-actions">${bottom}</div>`:""}`,true,quickButton,"session-directory");
+  shell(progress,`<article class="quiz">${content}</article><div class="question-actions"><button data-action="favorite:${esc(row.id)}">${fav?"★ 已收藏":"☆ 收藏"}</button><button class="${killed?"restore-action":"destructive-action"}" data-action="kill:${esc(row.id)}" ${reviewed?"disabled":""}>${reviewed?"已斩杀":killed?"恢复":"斩杀"}</button><button class="${reviewed?"review-active":""}" data-action="review:${esc(row.id)}">${reviewed?"● 待返修":"审核"}</button><button class="${note?"note-active":""}" data-action="note:${esc(row.id)}">${note?"● 笔记":"笔记"}</button><button data-action="edit:${esc(row.id)}">编辑</button></div>${bottom?`<div class="bottom-actions">${bottom}</div>`:""}`,true,quickButton,"session-directory");
   const blank=document.querySelector<HTMLInputElement>("#blank"); if(blank) blank.oninput=()=>{blankValue=blank.value; const submit=document.querySelector<HTMLButtonElement>('[data-action="submit"]'); if(submit)submit.disabled=!blankValue.trim(); void persistDraft();};
   bindOptionLongPress();
 }
 function explanation(q:QuestionInput){return `<div class="explain"><h3>解析</h3><div class="multiline">${q.explanation?esc(q.explanation):"无解析"}</div></div>`;}
 function answerText(q:QuestionInput){ if(q.options){const ids=Array.isArray(q.answer)?q.answer:[q.answer]; return q.options.filter(o=>ids.includes(o.id)).map(o=>`${o.id}. ${o.text}`).join("；");} return String(q.answer??q.back??q.content??""); }
-function resultPanel(q:QuestionInput){return `<section class="answer-panel"><h3>${pageState.pendingManual?"请自行判断":pageState.correct?"回答正确":"回答错误"}</h3><div class="multiline"><b>正确答案：</b>${esc(answerText(q))}</div>${explanation(q)}</section>`;}
+function resultPanel(q:QuestionInput){const answer=q.options?"":`<div class="multiline"><b>正确答案：</b>${esc(answerText(q))}</div>`;return `<section class="answer-panel"><h3>${pageState.pendingManual?"请自行判断":pageState.correct?"回答正确":"回答错误"}</h3>${answer}${explanation(q)}</section>`;}
 async function persistDraft(){if(!activeSession)return; await saveSession(activeSession.id,activeSession.current_index,{...pageState,selection:[...selection],excludedOptions:[...excludedOptions],blankValue,quickMode});}
 async function submit(){ if(!activeSession)return; const row=activeRows[activeSession.current_index],q=parseQuestion(row); let correct=false; const answer=q.type==="blank"?blankValue:[...selection];
   if(q.type==="single_choice")correct=selection.has(q.answer as string);
@@ -619,7 +634,7 @@ function bindOptionLongPress(){
 }
 
 async function editQuestionView(questionId:string) {
-  const row=(await getQuestions([questionId]))[0]; if(!row){alert("内容不存在");return goBack();}
+  const row=(await getQuestions([questionId]))[0]; if(!row){notify("内容不存在");return goBack();}
   const q=parseQuestion(row), reviewed=await isReviewed(questionId);
   const textField=(label:string,name:string,value:string,rows=3)=>`<label class="editor-field"><span>${label}</span><textarea name="${name}" rows="${rows}">${esc(value)}</textarea></label>`;
   let fields="";
@@ -635,7 +650,7 @@ async function editQuestionView(questionId:string) {
   const actions = reviewed
     ? button("保存",`save-edit:${questionId}`,"primary")
     : `${button("保存",`save-edit:${questionId}`)}${button("保存并送审",`save-edit-review:${questionId}`,"primary")}`;
-  shell("编辑",`<form id="question-editor" class="editor card" data-question-id="${esc(questionId)}">${fields}<div id="message" class="message"></div><div class="edit-actions">${actions}</div></form>`);
+  shell("编辑",`<form id="question-editor" class="editor card" data-question-id="${esc(questionId)}">${fields}<div id="message" class="message"></div><div class="edit-actions form-bottom-actions">${actions}</div></form>`);
 }
 
 function changedReviewIssues(before: QuestionInput, after: QuestionInput): ReviewIssue[] {
@@ -672,26 +687,26 @@ async function saveQuestionEdit(questionId:string, sendToReview=false) {
       : "用户请求检查当前题目内容，请确认题干、选项、答案与解析是否准确且相互一致。";
     await saveReview(questionId,effective,note,true);
     const wasCurrent=!!activeSession && activeRows[activeSession.current_index]?.id===questionId;
-    if(wasCurrent&&activeSession){ history.replaceState({view:"session",id:activeSession.id} satisfies Route,""); return next(); }
-    message("已保存并加入待返修"); setTimeout(()=>goBack(),220); return;
+    if(wasCurrent&&activeSession){ notify("已保存并加入待返修","ok"); history.replaceState({view:"session",id:activeSession.id} satisfies Route,""); return next(); }
+    notify("已保存并加入待返修","ok"); return goBack();
   }
-  if(await isReviewed(questionId) && confirm("题目已修改。\n\n是否标记为返修完成？完成后会清除旧作答记录，并按审核前状态决定是否恢复到题池。")){ await completeReview(questionId); message("已保存并完成返修"); }
-  else message("已保存");
-  setTimeout(()=>{ void goBack(); },220);
+  if(await isReviewed(questionId) && confirm("题目已修改。\n\n是否标记为返修完成？完成后会清除旧作答记录，并按审核前状态决定是否恢复到题池。")){ await completeReview(questionId); notify("已保存并完成返修","ok"); }
+  else notify("已保存","ok");
+  return goBack();
 }
 
 async function noteView(questionId:string) {
-  const row=(await getQuestions([questionId]))[0]; if(!row){alert("内容不存在");return goBack();}
+  const row=(await getQuestions([questionId]))[0]; if(!row){notify("内容不存在");return goBack();}
   const q=parseQuestion(row), note=await getNote(questionId);
   shell("笔记",`<section class="card note-editor"><div class="note-question"><span class="type">${questionTypeLabel(q)}</span><div class="multiline">${esc(questionLead(q))}</div></div>
     <label class="editor-field"><span>个人笔记</span><textarea id="note-content" rows="12" placeholder="记录易错点、辨析、记忆线索……">${esc(note?.content??"")}</textarea></label>
     <div id="message" class="message"></div>
-    <div class="note-actions">${note?button("删除笔记",`delete-note:${questionId}`,"delete-link"):""}${button("保存",`save-note:${questionId}`,"primary")}</div>
+    <div class="note-actions form-bottom-actions">${note?button("删除笔记",`delete-note:${questionId}`,"delete-link"):""}${button("保存",`save-note:${questionId}`,"primary")}</div>
   </section>`);
 }
 async function saveQuestionNote(questionId:string){
   const value=document.querySelector<HTMLTextAreaElement>("#note-content")?.value??"";
-  await saveNote(questionId,value); message(value.trim()?"已保存":"已清空"); setTimeout(()=>goBack(),180);
+  await saveNote(questionId,value); notify(value.trim()?"已保存":"已清空","ok"); return goBack();
 }
 
 const reviewIssueLabels: Array<[ReviewIssue,string]> = [["stem","题干 / 内容"],["options","选项"],["answer","答案"],["explanation","解析"],["other","其他"]];
@@ -708,18 +723,18 @@ const reviewPresets: Array<{label:string;issues:ReviewIssue[];text:string}> = [
 ];
 
 async function reviewView(questionId:string){
-  const row=(await getQuestions([questionId]))[0]; if(!row){alert("内容不存在");return goBack();}
+  const row=(await getQuestions([questionId]))[0]; if(!row){notify("内容不存在");return goBack();}
   const q=parseQuestion(row), review=await getReview(questionId); const selected=new Set<ReviewIssue>(review?JSON.parse(review.issues_json):[]);
   const presetButtons=reviewPresets.map((preset,i)=>`<button type="button" class="review-preset" data-action="review-preset:${i}">${esc(preset.label)}</button>`).join("");
   const reviewActions=review
-    ? `${button("取消审核",`cancel-review:${questionId}`,"delete-link")}${button("返修完成",`complete-review:${questionId}`)}${button("保存审核",`save-review:${questionId}`,"primary")}`
+    ? `${button("取消审核",`cancel-review:${questionId}`,"delete-link")}${button("返修完成",`complete-review:${questionId}`,"destructive-action")}${button("保存审核",`save-review:${questionId}`,"primary")}`
     : button("加入返修",`save-review:${questionId}`,"primary");
   shell(review?"编辑审核":"审核",`<section class="card review-editor">${reviewQuestionPreview(q)}
     <div><div class="editor-label">常见问题</div><div class="review-presets">${presetButtons}</div></div>
     <div class="editor-label">问题位置</div><div class="review-issues">${reviewIssueLabels.map(([value,label])=>`<label><input type="checkbox" name="review-issue" value="${value}" ${selected.has(value)?"checked":""}><span>${label}</span></label>`).join("")}</div>
     <label class="editor-field"><span>审核意见</span><textarea id="review-note" rows="7" placeholder="说明需要返修或检查的原因……">${esc(review?.note??"")}</textarea></label>
     <div id="message" class="message"></div>
-    <div class="review-actions">${reviewActions}</div>
+    <div class="review-actions form-bottom-actions">${reviewActions}</div>
   </section>`);
 }
 function applyReviewPreset(index:number){
@@ -734,8 +749,8 @@ async function saveQuestionReview(questionId:string){
   const note=document.querySelector<HTMLTextAreaElement>("#review-note")?.value??"";
   const wasCurrent=!!activeSession && activeRows[activeSession.current_index]?.id===questionId;
   await saveReview(questionId,issues,note);
-  if(wasCurrent&&activeSession){ history.replaceState({view:"session",id:activeSession.id} satisfies Route,""); return next(); }
-  message("已加入待返修并斩杀"); setTimeout(()=>goBack(),220);
+  if(wasCurrent&&activeSession){ notify("已加入待返修并斩杀","ok"); history.replaceState({view:"session",id:activeSession.id} satisfies Route,""); return next(); }
+  notify("已加入待返修并斩杀","ok"); return goBack();
 }
 
 function storedUserAnswerText(q:QuestionInput, raw:string|null|undefined): string {
@@ -744,12 +759,23 @@ function storedUserAnswerText(q:QuestionInput, raw:string|null|undefined): strin
   if(q.options){const ids=Array.isArray(value)?value:[value];return q.options.filter(o=>ids.includes(o.id)).map(o=>`${o.id}. ${o.text}`).join("；")||String(Array.isArray(value)?value.join("、"):value??"");}
   return String(Array.isArray(value)?value.join("、"):value??"");
 }
+function multipleChoiceDifference(q:QuestionInput,raw:string|null|undefined):string {
+  let parsed:unknown;
+  try{parsed=JSON.parse(raw??"null");}catch{parsed=raw;}
+  const selected=new Set<string>(Array.isArray(parsed)?parsed.filter((id):id is string=>typeof id==="string"):typeof parsed==="string"?[parsed]:[]);
+  const expected=new Set<string>(Array.isArray(q.answer)?q.answer:[]);
+  const labels=new Map((q.options??[]).map(option=>[option.id,option.text]));
+  const format=(ids:string[])=>ids.length?ids.map(id=>esc(labels.has(id)?`${id}. ${labels.get(id)}`:id)).join("；"):"无";
+  const wrong=[...selected].filter(id=>!expected.has(id));
+  const missed=[...expected].filter(id=>!selected.has(id));
+  return `<div class="wrong-diff-row"><b>错选</b><span class="multiline">${format(wrong)}</span></div><div class="wrong-diff-row"><b>漏选</b><span class="multiline">${format(missed)}</span></div>`;
+}
 function expandableQuestionDetail(q:QuestionInput): string {
   const explain=q.explanation?`<section class="review-preview-section"><b>解析</b><div class="multiline">${esc(q.explanation)}</div></section>`:"";
   if(q.type==="single_choice"||q.type==="multiple_choice"){
     const answerIds=new Set(Array.isArray(q.answer)?q.answer:[String(q.answer??"")]);
-    const options=(q.options??[]).map(o=>`<div class="review-preview-option ${answerIds.has(o.id)?"correct":""}"><b>${esc(o.id)}</b><span class="multiline">${esc(o.text)}</span>${answerIds.has(o.id)?`<em>正确</em>`:""}</div>`).join("");
-    return `<div class="review-question-preview detail-only"><div class="review-preview-options">${options}</div><section class="review-preview-section"><b>正确答案</b><div class="multiline">${esc(answerText(q))}</div></section>${explain}</div>`;
+    const options=(q.options??[]).map(o=>`<div class="review-preview-option ${answerIds.has(o.id)?"correct":""}"><b>${esc(o.id)}</b><span class="multiline">${esc(o.text)}</span></div>`).join("");
+    return `<div class="review-question-preview detail-only"><div class="review-preview-options">${options}</div>${explain}</div>`;
   }
   if(q.type==="blank")return `<div class="review-question-preview detail-only"><section class="review-preview-section"><b>标准答案</b><div class="multiline">${esc(String(q.answer??""))}</div></section>${explain}</div>`;
   if(q.type==="recall")return `<div class="review-question-preview detail-only"><section class="review-preview-section"><b>背面</b><div class="multiline">${esc(q.back)}</div></section>${explain}</div>`;
@@ -767,27 +793,27 @@ function expandableCard(kind:ExpandableListKind,row:QuestionRow,summaryExtra:str
   return `<div class="card compact-list-card expandable-list-card ${expanded?"expanded":""}"><div class="compact-card-head"><span class="type">${questionTypeLabel(q)}</span><div class="compact-card-actions">${actions}</div></div><button class="expandable-card-summary" data-action="${action}" aria-expanded="${expanded}" aria-label="${expanded?"收起":"展开"}：${esc(questionLead(q))}"><span class="compact-card-title multiline">${esc(questionLead(q))}</span><span class="expandable-card-symbol" aria-hidden="true">${chevronIcon(!expanded)}</span>${summaryExtra}</button>${expanded?`<div class="expandable-card-detail">${expandableQuestionDetail(q)}${expandedExtra}</div>`:""}</div>`;
 }
 async function listView(kind:ListKind) {
-  if(kind==="killed"){const rows=await killedQuestions();return shell("已斩杀",rows.length?`<div class="question-list">${rows.map(r=>{const q=parseQuestion(r);return `<div class="card"><span class="type">${questionTypeLabel(q)}</span><p class="multiline">${esc(questionLead(q))}</p><button data-action="restore-killed:${esc(r.id)}">恢复</button></div>`}).join("")}</div>`:`<div class="empty">暂无已斩杀题目</div>`);}
+  if(kind==="killed"){const rows=await killedQuestions();return shell("已斩杀",rows.length?`<div class="question-list">${rows.map(r=>{const q=parseQuestion(r);return `<div class="card"><span class="type">${questionTypeLabel(q)}</span><p class="multiline">${esc(questionLead(q))}</p><button class="restore-action" data-action="restore-killed:${esc(r.id)}">恢复</button></div>`}).join("")}</div>`:emptyState("暂无已斩杀题目","斩杀后的题目会显示在这里。",{text:"返回题库管理",id:"import"}));}
   if(kind==="notes"){
     const rows=await noteQuestions();
     const body=rows.map(r=>expandableCard("notes",r,`<span class="note-preview compact-preview multiline">${esc(r.note_content)}</span>`,`<button data-action="note:${esc(r.id)}">编辑</button>`,`<section class="expanded-meta"><b>笔记</b><div class="multiline">${esc(r.note_content)}</div></section>`)).join("");
-    return shell("笔记",rows.length?`<div class="question-list compact-list">${body}</div>`:`<div class="empty">暂无笔记</div>`,true,rows.length?listHeaderToggle("notes",rows.map(r=>r.id)):"");
+    return shell("笔记",rows.length?`<div class="question-list compact-list">${body}</div>`:emptyState("暂无笔记","在答题时记录笔记，方便日后查看。",{text:"去学习",id:"scope"}),true,rows.length?listHeaderToggle("notes",rows.map(r=>r.id)):"");
   }
   if(kind==="reviews"){
     const rows=await reviewQuestions(); const labels=new Map(reviewIssueLabels);
     const body=rows.map(r=>{const issues=(JSON.parse(r.review_issues_json) as ReviewIssue[]).map(x=>labels.get(x)??x).join(" / ");const q=parseQuestion(r);const attempt=r.latest_answered_at?`<section class="expanded-meta"><b>最近作答</b><div class="multiline">${esc(storedUserAnswerText(q,r.latest_user_answer))}</div><small>${r.latest_is_correct===1?"答对":"答错"} · ${esc(r.latest_answered_at)}</small></section>`:"";return expandableCard("reviews",r,`${issues?`<span class="review-tags">${esc(issues)}</span>`:""}${r.review_note?`<span class="note-preview compact-preview multiline">${esc(r.review_note)}</span>`:""}`,`${button("审核",`review:${r.id}`)}${button("编辑",`edit:${r.id}`)}`,`<section class="expanded-meta"><b>审核信息</b>${issues?`<div>${esc(issues)}</div>`:""}${r.review_note?`<div class="multiline">${esc(r.review_note)}</div>`:""}</section>${attempt}`)}).join("");
-    return shell("待返修",rows.length?`${button("导出返修 JSON","export-repair-review","primary")}<div class="question-list compact-list">${body}</div>`:`<div class="empty">暂无待返修题目</div>`,true,rows.length?listHeaderToggle("reviews",rows.map(r=>r.id)):"");
+    return shell("待返修",rows.length?`${button("导出返修 JSON","export-repair-review","primary")}<div class="question-list compact-list">${body}</div>`:emptyState("暂无待返修题目","需要审核或返修的题目会显示在这里。",{text:"去学习",id:"scope"}),true,rows.length?listHeaderToggle("reviews",rows.map(r=>r.id)):"");
   }
   if(kind==="wrong"){
     const rows=await wrongQuestions();
     const actions=`${button("导出错题 JSON","export-error-review")}${rows.some(graded)?button(`练习 ${rows.filter(graded).length} 题`,`practice:wrong`):""}`;
-    const body=rows.map(r=>{const q=parseQuestion(r);const extra=`<section class="expanded-meta wrong-meta"><b>本次错误答案</b><div class="multiline">${esc(storedUserAnswerText(q,r.latest_user_answer))}</div><small>${esc(r.latest_answered_at)}</small></section>`;return expandableCard("wrong",r,"","",extra)}).join("");
-    return shell("当前错题",rows.length?`${actions}<div class="question-list compact-list">${body}</div>`:`<div class="empty">暂无错题</div>`,true,rows.length?listHeaderToggle("wrong",rows.map(r=>r.id)):"");
+    const body=rows.map(r=>{const q=parseQuestion(r);const difference=q.type==="multiple_choice"?multipleChoiceDifference(q,r.latest_user_answer):`<b>本次错误答案</b><div class="multiline">${esc(storedUserAnswerText(q,r.latest_user_answer))}</div>`;const extra=`<section class="expanded-meta wrong-meta">${difference}<small>${esc(r.latest_answered_at)}</small></section>`;return expandableCard("wrong",r,"","",extra)}).join("");
+    return shell("当前错题",rows.length?`${actions}<div class="question-list compact-list">${body}</div>`:emptyState("暂无错题","答错的题目会显示在这里。",{text:"去学习",id:"scope"}),true,rows.length?listHeaderToggle("wrong",rows.map(r=>r.id)):"");
   }
   const rows=await favoriteQuestions();
   const actions=rows.some(graded)?button(`练习 ${rows.filter(graded).length} 题`,`practice:favorites`,"primary"):"";
   const body=rows.map(r=>expandableCard("favorites",r,"","","")).join("");
-  return shell("收藏",rows.length?`${actions}<div class="question-list compact-list">${body}</div>`:`<div class="empty">暂无收藏</div>`,true,rows.length?listHeaderToggle("favorites",rows.map(r=>r.id)):"");
+  return shell("收藏",rows.length?`${actions}<div class="question-list compact-list">${body}</div>`:emptyState("暂无收藏","收藏的题目会显示在这里。",{text:"去学习",id:"scope"}),true,rows.length?listHeaderToggle("favorites",rows.map(r=>r.id)):"");
 }
 async function statsView(){const s=await stats();shell("基础统计",`<div class="stats"><div><b>${s.total}</b><span>总作答</span></div><div><b>${s.correct}</b><span>正确</span></div><div><b>${s.wrong}</b><span>错误</span></div><div><b>${s.rate}%</b><span>正确率</span></div><div><b>${s.currentWrong}</b><span>当前错题</span></div></div>`);}
 
@@ -798,18 +824,18 @@ async function saveJsonFile(filename:string,data:unknown,title:string){
     if(navigator.share && (!nav.canShare || nav.canShare({files:[file]}))){ await navigator.share({files:[file],title}); return; }
   } catch(err) { if(err instanceof DOMException && err.name==="AbortError") return; }
   try {
-    const url=URL.createObjectURL(file); const a=document.createElement("a"); a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500); alert(`已生成 ${filename}`);
+    const url=URL.createObjectURL(file); const a=document.createElement("a"); a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500); notify(`已生成 ${filename}`,"ok");
   } catch {
-    try { await navigator.clipboard.writeText(text); alert("无法直接保存文件，JSON 已复制到剪贴板"); }
-    catch { alert("导出失败，请重试"); }
+    try { await navigator.clipboard.writeText(text); notify("无法直接保存文件，JSON 已复制到剪贴板","ok"); }
+    catch { notify("导出失败，请重试"); }
   }
 }
 async function exportWrongReview(){
-  const review=await buildCurrentWrongReview(); if(!review.items.length){alert("暂无当前错题");return;}
+  const review=await buildCurrentWrongReview(); if(!review.items.length){notify("暂无当前错题");return;}
   const date=new Date().toISOString().slice(0,10); await saveJsonFile(`knoop-error-review-${date}.json`,review,"Knoop 错题回炉");
 }
 async function exportRepairReview(){
-  const review=await buildRepairReview(); if(!review.items.length){alert("暂无待返修题目");return;}
+  const review=await buildRepairReview(); if(!review.items.length){notify("暂无待返修题目");return;}
   const date=new Date().toISOString().slice(0,10); await saveJsonFile(`knoop-repair-review-${date}.json`,review,"Knoop 题目返修");
 }
 async function exportBankFile(bankId:string){
@@ -818,7 +844,7 @@ async function exportBankFile(bankId:string){
 }
 
 async function exportSelectedBanks(){
-  const ids=[...selectedExportBanks]; if(ids.length<2)return alert("请至少选择两个题库");
+  const ids=[...selectedExportBanks]; if(ids.length<2)return notify("请至少选择两个题库");
   const bundle=await buildBundleExport(ids); const date=new Date().toISOString().slice(0,10);
   await saveJsonFile(`knoop-bundle-${date}.json`,bundle,`导出 ${bundle.banks.length} 个题库`);
 }
@@ -840,7 +866,7 @@ app.addEventListener("click",async e=>{const target=(e.target as HTMLElement).cl
     if(action.startsWith("export-bank:"))return exportBankFile(action.slice("export-bank:".length));
     if(action.startsWith("resume:"))return navigate({view:"session",id:action.slice(7)});
     if(action.startsWith("start-preset:"))return startPresetById(action.slice("start-preset:".length));
-    if(action.startsWith("delete-preset:")){const id=action.slice("delete-preset:".length);const preset=scopePresets.find(p=>p.id===id);if(!preset)return;if(!confirm(`删除常用组题“${preset.name}”？`))return;scopePresets=scopePresets.filter(p=>p.id!==id);persistScopePresets();if(recentPresetId()===id)localStorage.removeItem(recentPresetStorageKey);return presetsView();}
+    if(action.startsWith("delete-preset:")){const id=action.slice("delete-preset:".length);const preset=scopePresets.find(p=>p.id===id);if(!preset)return;if(!confirm(`删除常用组题“${preset.name}”？`))return;scopePresets=scopePresets.filter(p=>p.id!==id);persistScopePresets();if(recentPresetId()===id)localStorage.removeItem(recentPresetStorageKey);notify("已删除常用组题","ok");return presetsView();}
     if(action.startsWith("list-toggle-all:")){const kind=action.slice("list-toggle-all:".length) as ExpandableListKind;if(!["wrong","favorites","notes","reviews"].includes(kind))return;const rows=kind==="notes"?await noteQuestions():kind==="reviews"?await reviewQuestions():kind==="wrong"?await wrongQuestions():await favoriteQuestions();const set=expandedSet(kind);const all=rows.length>0&&rows.every(r=>set.has(r.id));all?set.clear():rows.forEach(r=>set.add(r.id));return listView(kind);}
     if(action.startsWith("toggle-list-card:")){const rest=action.slice("toggle-list-card:".length);const split=rest.indexOf(":");if(split<0)return;const kind=rest.slice(0,split) as ExpandableListKind;const id=decodeURIComponent(rest.slice(split+1));if(!["wrong","favorites","notes","reviews"].includes(kind))return;const set=expandedSet(kind);set.has(id)?set.delete(id):set.add(id);await listView(kind);document.querySelectorAll<HTMLButtonElement>(".expandable-card-summary").forEach(button=>{if(button.dataset.action===action)button.focus({preventScroll:true});});return;}
     if(action.startsWith("fold:")){const id=action.slice(5);collapsedScopeNodes.has(id)?collapsedScopeNodes.delete(id):collapsedScopeNodes.add(id);saveScopeCollapseState();return scopeView(action);}
@@ -854,11 +880,11 @@ app.addEventListener("click",async e=>{const target=(e.target as HTMLElement).cl
     if(action.startsWith("start-scope:")){const mode=action.slice("start-scope:".length);const route=history.state as Route;const ids=route.view==="choose"?(route.nodeIds??(route.nodeId?[route.nodeId]:[])):[];const count=mode==="random"?Number(document.querySelector<HTMLInputElement>("#random-count")?.value||10):mode==="memorization-random"?Number(document.querySelector<HTMLInputElement>("#memorization-random-count")?.value||10):undefined;return startScope(mode,ids,count);}
     if(action.startsWith("open-directory:")){const kind=action.slice("open-directory:".length) as DirectoryKind;const route=history.state as Route;const ids=route.view==="choose"?(route.nodeIds??(route.nodeId?[route.nodeId]:[])):[];return navigate({view:"directory",nodeIds:ids,kind,query:""});}
     if(action==="session-directory"){if(!activeSession)return;return navigate({view:"directory",sessionId:activeSession.id,kind:activeSession.mode==="memorization"?"memorization":"brush",query:""});}
-    if(action==="directory-go"){const route=history.state as Route;if(route.view!=="directory")return;const raw=Number(document.querySelector<HTMLInputElement>("#directory-index")?.value||0);const index=Math.trunc(raw)-1;if(index<0)return alert("请输入有效题号");if(route.sessionId){const session=await sessionById(route.sessionId);if(!session)return alert("学习进度不存在");const ids=JSON.parse(session.question_ids_json) as string[];if(index>=ids.length)return alert(`题号应在 1-${ids.length} 之间`);const saved=JSON.parse(session.state_json||"{}") as {quickMode?:boolean};quickMode=!!saved.quickMode;activeSession=session;const found=await getQuestions(ids);const byId=new Map(found.map(r=>[r.id,r]));activeRows=ids.map(id=>byId.get(id)).filter(Boolean) as QuestionRow[];selection.clear();excludedOptions.clear();blankValue="";pageState={};await saveSession(session.id,index,{quickMode});return navigate({view:"session",id:session.id});}const all=await questionsForScope(route.nodeIds??[]);const rows=route.kind==="memorization"?all.filter(q=>q.type==="memorization"):all.filter(isEnabledBrush);if(index>=rows.length)return alert(`题号应在 1-${rows.length} 之间`);const mode=route.kind==="memorization"?"memorization":"sequential";const id=await createSession(mode,{nodeIds:route.nodeIds??[],order:"direct"},rows.map(r=>r.id),index);return navigate({view:"session",id});}
-    if(action.startsWith("start-directory-search:")){const order=action.slice("start-directory-search:".length);const route=history.state as Route;if(route.view!=="directory"||route.sessionId)return;const query=route.query?.trim()??"";if(!query)return;const all=await questionsForScope(route.nodeIds??[]);let rows=(route.kind==="memorization"?all.filter(q=>q.type==="memorization"):all.filter(isEnabledBrush)).filter(r=>directoryMatches(parseQuestion(r),query));if(order==="random")rows=shuffled(rows);if(!rows.length)return alert("没有匹配内容");const mode=route.kind==="memorization"?"memorization":order==="random"?"random":"sequential";const id=await createSession(mode,{nodeIds:route.nodeIds??[],order,source:"directory-search",searchQuery:query},rows.map(r=>r.id));return navigate({view:"session",id});}
+    if(action==="directory-go"){const route=history.state as Route;if(route.view!=="directory")return;const raw=Number(document.querySelector<HTMLInputElement>("#directory-index")?.value||0);const index=Math.trunc(raw)-1;if(index<0)return notify("请输入有效题号");if(route.sessionId){const session=await sessionById(route.sessionId);if(!session)return notify("学习进度不存在");const ids=JSON.parse(session.question_ids_json) as string[];if(index>=ids.length)return notify(`题号应在 1-${ids.length} 之间`);const saved=JSON.parse(session.state_json||"{}") as {quickMode?:boolean};quickMode=!!saved.quickMode;activeSession=session;const found=await getQuestions(ids);const byId=new Map(found.map(r=>[r.id,r]));activeRows=ids.map(id=>byId.get(id)).filter(Boolean) as QuestionRow[];selection.clear();excludedOptions.clear();blankValue="";pageState={};await saveSession(session.id,index,{quickMode});return navigate({view:"session",id:session.id});}const all=await questionsForScope(route.nodeIds??[]);const rows=route.kind==="memorization"?all.filter(q=>q.type==="memorization"):all.filter(isEnabledBrush);if(index>=rows.length)return notify(`题号应在 1-${rows.length} 之间`);const mode=route.kind==="memorization"?"memorization":"sequential";const id=await createSession(mode,{nodeIds:route.nodeIds??[],order:"direct"},rows.map(r=>r.id),index);return navigate({view:"session",id});}
+    if(action.startsWith("start-directory-search:")){const order=action.slice("start-directory-search:".length);const route=history.state as Route;if(route.view!=="directory"||route.sessionId)return;const query=route.query?.trim()??"";if(!query)return;const all=await questionsForScope(route.nodeIds??[]);let rows=(route.kind==="memorization"?all.filter(q=>q.type==="memorization"):all.filter(isEnabledBrush)).filter(r=>directoryMatches(parseQuestion(r),query));if(order==="random")rows=shuffled(rows);if(!rows.length)return notify("没有匹配内容");const mode=route.kind==="memorization"?"memorization":order==="random"?"random":"sequential";const id=await createSession(mode,{nodeIds:route.nodeIds??[],order,source:"directory-search",searchQuery:query},rows.map(r=>r.id));return navigate({view:"session",id});}
     if(action.startsWith("start-directory:")){const index=Number(action.slice("start-directory:".length));const route=history.state as Route;if(route.view!=="directory"||route.sessionId)return;const all=await questionsForScope(route.nodeIds??[]);const rows=route.kind==="memorization"?all.filter(q=>q.type==="memorization"):all.filter(isEnabledBrush);if(!rows.length||!Number.isInteger(index)||index<0||index>=rows.length)return;const mode=route.kind==="memorization"?"memorization":"sequential";const id=await createSession(mode,{nodeIds:route.nodeIds??[],order:"direct"},rows.map(r=>r.id),index);return navigate({view:"session",id});}
     if(action.startsWith("jump-session:")){const route=history.state as Route;const sessionId=route.view==="directory"&&route.sessionId?route.sessionId:activeSession?.id;if(!sessionId)return;const session=await sessionById(sessionId);if(!session)return;const ids=JSON.parse(session.question_ids_json) as string[];const index=Number(action.slice("jump-session:".length));if(!Number.isInteger(index)||index<0||index>=ids.length)return;const saved=JSON.parse(session.state_json||"{}") as {quickMode?:boolean};quickMode=!!saved.quickMode;const found=await getQuestions(ids);const byId=new Map(found.map(r=>[r.id,r]));activeRows=ids.map(id=>byId.get(id)).filter(Boolean) as QuestionRow[];selection.clear();excludedOptions.clear();blankValue="";pageState={};await saveSession(session.id,index,{quickMode});session.current_index=index;activeSession=session;return navigate({view:"session",id:session.id});}
-    if(action.startsWith("delete-bank:")){const bankId=action.slice("delete-bank:".length);const bank=(await getBanks()).find(b=>b.id===bankId);if(!confirm(`删除题库“${bank?.title??bankId}”？\n\n该题库的题目、作答记录、收藏、审核、笔记和相关未完成进度都会一并删除。此操作不可撤销。`))return;const btn=target as HTMLButtonElement;const oldText=btn.textContent;btn.disabled=true;btn.textContent="删除中…";try{await deleteBank(bankId);return importView();}catch(err){btn.disabled=false;btn.textContent=oldText;throw err;}}
+    if(action.startsWith("delete-bank:")){const bankId=action.slice("delete-bank:".length);const bank=(await getBanks()).find(b=>b.id===bankId);if(!confirm(`删除题库“${bank?.title??bankId}”？\n\n该题库的题目、作答记录、收藏、审核、笔记和相关未完成进度都会一并删除。此操作不可撤销。`))return;const btn=target as HTMLButtonElement;const oldText=btn.textContent;btn.disabled=true;btn.textContent="删除中…";try{await deleteBank(bankId);notify("已删除题库","ok");return importView();}catch(err){btn.disabled=false;btn.textContent=oldText;throw err;}}
     if(action==="toggle-quick"){quickMode=!quickMode;await persistDraft();return quizView();}
     if(action.startsWith("option:")&&!pageState.submitted){
       const id=action.slice(7); if(id===suppressOptionClickId&&Date.now()<suppressOptionClickUntil)return; const q=parseQuestion(activeRows[activeSession!.current_index]); excludedOptions.delete(id);
@@ -880,20 +906,20 @@ app.addEventListener("click",async e=>{const target=(e.target as HTMLElement).cl
       if(!already&&!confirm("斩杀这道题？\n\n以后新建刷题会话会自动排除，可在“题库 / 导入 → 已斩杀”中恢复。"))return;
       const killed=await toggleKilled(id); if(killed)return next(); return quizView();
     }
-    if(action.startsWith("restore-killed:")){await toggleKilled(action.slice("restore-killed:".length));return listView("killed");}
+    if(action.startsWith("restore-killed:")){await toggleKilled(action.slice("restore-killed:".length));notify("已恢复题目","ok");return listView("killed");}
     if(action.startsWith("review:"))return navigate({view:"review",questionId:action.slice(7)});
     if(action.startsWith("review-preset:")){applyReviewPreset(Number(action.slice("review-preset:".length)));return;}
     if(action.startsWith("save-review:"))return saveQuestionReview(action.slice("save-review:".length));
-    if(action.startsWith("complete-review:")){const id=action.slice("complete-review:".length);if(!confirm("确认这道题已经检查或返修完成？\n\n完成后会清除旧作答记录，并按审核前状态决定是否恢复到题池。"))return;await completeReview(id);message("已完成返修");setTimeout(()=>goBack(),180);return;}
-    if(action.startsWith("cancel-review:")){const id=action.slice("cancel-review:".length);if(!confirm("取消这道题的审核标记？"))return;await cancelReview(id);return goBack();}
+    if(action.startsWith("complete-review:")){const id=action.slice("complete-review:".length);if(!confirm("确认这道题已经检查或返修完成？\n\n完成后会清除旧作答记录，并按审核前状态决定是否恢复到题池。"))return;await completeReview(id);notify("已完成返修","ok");return goBack();}
+    if(action.startsWith("cancel-review:")){const id=action.slice("cancel-review:".length);if(!confirm("取消这道题的审核标记？"))return;await cancelReview(id);notify("已取消审核","ok");return goBack();}
     if(action.startsWith("note:"))return navigate({view:"note",questionId:action.slice(5)});
     if(action.startsWith("save-note:"))return saveQuestionNote(action.slice("save-note:".length));
-    if(action.startsWith("delete-note:")){const id=action.slice("delete-note:".length);if(!confirm("删除这条笔记？"))return;await saveNote(id,"");return goBack();}
+    if(action.startsWith("delete-note:")){const id=action.slice("delete-note:".length);if(!confirm("删除这条笔记？"))return;await saveNote(id,"");notify("已删除笔记","ok");return goBack();}
     if(action.startsWith("edit:")){const current=isRoute(history.state)?history.state:null;return navigate({view:"edit",questionId:action.slice(5),returnTo:asReturnTarget(current)});}
     if(action.startsWith("save-edit-review:"))return saveQuestionEdit(action.slice("save-edit-review:".length),true);
     if(action.startsWith("save-edit:"))return saveQuestionEdit(action.slice("save-edit:".length));
     if(action.startsWith("practice:")){const rows=action.endsWith("wrong")?await wrongQuestions():await favoriteQuestions();return startRows(action.endsWith("wrong")?"wrong":"favorites",rows.filter(graded));}
-  } catch(err){alert(err instanceof Error?err.message:String(err));}
+  } catch(err){notify(err instanceof Error?err.message:String(err));}
 });
 
 window.addEventListener("popstate", e => {

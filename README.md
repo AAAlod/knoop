@@ -2,7 +2,9 @@
 
 > 一个本地优先的个人知识练习工具。
 
-**0.1.2 Alpha**
+**0.1.3 Alpha**
+
+[![AI-assisted development](https://img.shields.io/badge/development-AI--assisted-6f42c1)](#ai-辅助开发)
 
 [简体中文](README.md)
 
@@ -81,6 +83,12 @@ Knoop 目前主要使用：
 ## 构建
 
 安装依赖后运行 `npm run build` 构建前端；Android Release 的工具要求、构建命令和可选签名方式见 [构建说明](docs/BUILDING.md)。
+
+目前仅提供 Android **arm64-v8a（64 位 ARM）** Release APK，其他架构尚未支持。
+
+## AI 辅助开发
+
+Knoop 在代码实现、文档整理和问题排查中使用 AI 工具辅助。功能取舍、测试和发布由维护者负责；AI 辅助产生的修改同样需要检查。
 
 ## 名字
 
