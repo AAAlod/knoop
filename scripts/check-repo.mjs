@@ -20,7 +20,7 @@ assert(/name\s*=\s*"knoop"/.test(cargo) && /name\s*=\s*"knoop_lib"/.test(cargo),
 assert(cargo.includes('version = "' + pkg.version + '"'), 'Cargo version');
 const tauriProperties = read('src-tauri/gen/android/app/tauri.properties');
 assert(tauriProperties.includes('tauri.android.versionName=' + pkg.version), 'Android versionName');
-for (const setting of ['strip = true', 'lto = true', 'opt-level = "z"', 'codegen-units = 1', 'panic = "abort"']) assert(cargo.includes(setting), `Release profile: ${setting}`);
+for (const setting of ['strip = true', 'lto = true', 'opt-level = "z"', 'codegen-units = 1', 'panic = "unwind"']) assert(cargo.includes(setting), `Release profile: ${setting}`);
 assert(gradle.includes('applicationId = "com.kehai.knoop"'), 'Android applicationId');
 assert(read('src/db.ts').includes('sqlite:knoop.db'), 'SQLite filename');
 assert(!JSON.stringify(tauri.app.security.csp).includes('unsafe-eval'), 'CSP unsafe-eval');

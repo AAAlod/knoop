@@ -21,6 +21,8 @@ export async function db(): Promise<Database> {
     `CREATE TABLE IF NOT EXISTS killed_questions (question_id TEXT PRIMARY KEY, created_at TEXT NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS notes (question_id TEXT PRIMARY KEY, content TEXT NOT NULL, updated_at TEXT NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS question_reviews (question_id TEXT PRIMARY KEY, issues_json TEXT NOT NULL DEFAULT '[]', note TEXT NOT NULL DEFAULT '', question_snapshot_json TEXT NOT NULL, was_killed_before INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+    `CREATE TABLE IF NOT EXISTS ai_review_batch_jobs (id TEXT PRIMARY KEY, model TEXT NOT NULL, review_json TEXT NOT NULL, batches_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+    `CREATE TABLE IF NOT EXISTS ai_review_groups (id TEXT PRIMARY KEY, source_question_id TEXT NOT NULL, source_question_title TEXT NOT NULL, model TEXT NOT NULL, generated_at TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, bank_json TEXT NOT NULL, question_meta_json TEXT NOT NULL, current_index INTEGER NOT NULL DEFAULT 0, state_json TEXT NOT NULL DEFAULT '{}', results_json TEXT NOT NULL DEFAULT '[]', completed_at TEXT)`,
     "CREATE INDEX IF NOT EXISTS idx_questions_node ON questions(node_id)",
     "CREATE INDEX IF NOT EXISTS idx_attempts_question ON attempts(question_id, id DESC)"
   ];

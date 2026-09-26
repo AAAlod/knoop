@@ -254,3 +254,5 @@ main:has(.form-bottom-actions){padding-bottom:calc(132px + env(safe-area-inset-b
 @media(max-width:360px){.directory-item{grid-template-columns:30px auto minmax(0,1fr)}.form-bottom-actions{gap:6px;padding-left:12px;padding-right:12px}.review-actions.form-bottom-actions button{padding-left:6px;padding-right:6px;font-size:13px}}
 
 .review-actions .destructive-action{border:1px solid #edcbc6;background:#fff1f0;color:#a33;box-shadow:none}
+
+.ai-settings summary{cursor:pointer;font-weight:700}.ai-settings p,.ai-preview>p{color:#666;font-size:13px;line-height:1.5}.ai-preview>h2{font-size:18px;margin-top:24px}.ai-preview .card h3{margin:0 0 12px}.ai-config-status{overflow-wrap:anywhere}

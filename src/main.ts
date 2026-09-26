@@ -1,6 +1,12 @@
 import "./style.css";
 import "katex/dist/katex.min.css";
 import renderMathInElement from "katex/contrib/auto-render";
+import { invoke } from "@tauri-apps/api/core";
+import { parseAiReviewBank } from "./ai-review";
+import { candidateFingerprint, checkedCandidateIds, collectReadyCandidates, createBatchJob, deleteBatchJob, GENERATED_PER_SOURCE, getBatchJob, jobBatches, jobReview, latestBatchJob, MAX_SOURCES_PER_RUN, saveBatchJob, sourceKey, SOURCES_PER_BATCH } from "./batch-review";
+import { gradeQuestion } from "./grading";
+import { createTempGroup, createTempGroupWithMetadata, deleteTempGroup, emptyTempState, getTempGroup, listTempGroups, restartTempGroup, saveTempProgress, tempBank, tempResults, tempState } from "./temp-review";
+import type { BankFile } from "./types";
 import { addAttempt, buildBankExport, buildBundleExport, buildCurrentWrongReview, buildRepairReview, cancelReview, completeReview, createSession, db, deleteBank, favoriteQuestions, getBanks, getNodes, getNote, getQuestions, getReview, importBank, isFavorite, isKilled, isReviewed, killedQuestions, latestSession, librarySummary, noteQuestions, questionsForScope, reviewQuestions, saveNote, saveReview, saveSession, sessionById, stats, toggleFavorite, toggleKilled, updateQuestionContent, validateBank, validateBundle, wrongQuestions } from "./db";
 import type { BankRow, NodeRow, QuestionInput, QuestionRow, ReviewIssue, SessionRow } from "./types";
 import { parseQuestion } from "./types";
@@ -77,11 +83,15 @@ type ReturnTarget =
   | { view: "session"; id: string }
   | { view: "list"; kind: ListKind }
   | { view: "presets" }
-  | { view: "stats" };
+  | { view: "stats" }
+  | { view: "temp-groups" }
+  | { view: "temp-session"; id: string }
+  | { view: "batch-review"; id?: string };
 type Route = ReturnTarget
   | { view: "edit"; questionId: string; returnTo?: ReturnTarget }
   | { view: "note"; questionId: string }
-  | { view: "review"; questionId: string };
+  | { view: "review"; questionId: string }
+  | { view: "ai-review"; questionId: string };
 
 const esc = (s: unknown) => String(s ?? "").replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c]!));
 const button = (text: string, action: string, cls = "") => `<button class="${cls}" data-action="${esc(action)}">${esc(text)}</button>`;
@@ -175,6 +185,7 @@ function isReturnTarget(value: unknown): value is ReturnTarget {
     case "scope":
     case "presets":
     case "stats":
+    case "temp-groups":
       return true;
     case "choose":
       return (route.nodeIds === undefined || (Array.isArray(route.nodeIds) && route.nodeIds.every(x => typeof x === "string")))
@@ -184,7 +195,10 @@ function isReturnTarget(value: unknown): value is ReturnTarget {
         && (route.sessionId === undefined || typeof route.sessionId === "string")
         && (route.kind === undefined || route.kind === "brush" || route.kind === "memorization")
         && (route.query === undefined || typeof route.query === "string");
+    case "batch-review":
+      return route.id === undefined || (typeof route.id === "string" && route.id.length > 0);
     case "session":
+    case "temp-session":
       return typeof route.id === "string" && route.id.length > 0;
     case "list":
       return ["wrong", "favorites", "killed", "notes", "reviews"].includes(String(route.kind));
@@ -200,7 +214,7 @@ function isRoute(value: unknown): value is Route {
     return typeof route.questionId === "string" && route.questionId.length > 0
       && (route.returnTo === undefined || isReturnTarget(route.returnTo));
   }
-  if (route.view === "note" || route.view === "review") {
+  if (route.view === "note" || route.view === "review" || route.view === "ai-review") {
     return typeof route.questionId === "string" && route.questionId.length > 0;
   }
   return false;
@@ -217,9 +231,13 @@ async function renderRoute(route: Route): Promise<void> {
     case "edit": return editQuestionView(route.questionId);
     case "note": return noteView(route.questionId);
     case "review": return reviewView(route.questionId);
+    case "ai-review": return aiReviewView(route.questionId);
     case "list": return listView(route.kind);
     case "presets": return presetsView();
     case "stats": return statsView();
+    case "temp-groups": return tempGroupsView();
+    case "temp-session": return tempSessionView(route.id);
+    case "batch-review": return batchReviewView(route.id);
   }
 }
 
@@ -229,20 +247,24 @@ async function navigate(route: Route, replace = false): Promise<void> {
   await renderRoute(route);
 }
 function asReturnTarget(route: Route | null | undefined): ReturnTarget {
-  if (!route || route.view === "edit" || route.view === "note" || route.view === "review") return { view: "home" };
+  if (!route || route.view === "edit" || route.view === "note" || route.view === "review" || route.view === "ai-review") return { view: "home" };
   return route;
 }
 let forcedBackTarget: ReturnTarget | null = null;
 async function goBack(): Promise<void> {
   const route = isRoute(history.state) ? history.state : null;
   if (route?.view === "edit" && route.returnTo) forcedBackTarget = route.returnTo;
+  if (route?.view === "ai-review" && aiPendingRequestId) {
+    void invoke("cancel_ai_review", {requestId: aiPendingRequestId}).catch(() => {});
+    aiPendingRequestId = null;
+  }
   history.back();
 }
 
 async function home() {
   activeSession = null; activeRows = []; selection.clear(); excludedOptions.clear(); blankValue = ""; quickMode = false; pageState = {};
   selectedScopeNodes.clear(); scopeNodesCache = []; scopeContentNodeIds.clear();
-  const resume = await latestSession(); const summary = await librarySummary(); const pendingReviews = (await reviewQuestions()).length;
+  const resume = await latestSession(); const summary = await librarySummary(); const pendingReviews = (await reviewQuestions()).length; const tempGroupCount = (await listTempGroups()).length; const previousBatchJob = await latestBatchJob();
   const recent = scopePresets.find(p=>p.id===recentPresetId());
   const recentCard = recent ? `<section class="home-recent-preset"><div><small>最近组题</small><b>${esc(recent.name)}</b><span>${esc(presetSummary(recent))}</span></div><button class="primary" data-action="start-preset:${esc(recent.id)}">开始</button></section>` : "";
   const filters = brushTypes.map(type => `<button class="type-filter ${enabledBrushTypes.has(type)?"active":""}" data-action="filter-type:${type}" aria-pressed="${enabledBrushTypes.has(type)}">${brushLabels[type]}</button>`).join("");
@@ -253,6 +275,8 @@ async function home() {
       ${resume ? button("继续上次学习", `resume:${resume.id}`, "primary") : ""}
       ${summary.banks ? button("选择范围", "scope", "primary") : button("导入题库，开始学习", "import", "primary")}
       ${button("常用组题", "presets")}
+      ${button(tempGroupCount ? `AI 回炉题组 ${tempGroupCount}` : "AI 回炉题组", "temp-groups")}
+      ${previousBatchJob ? button("继续批量回炉",`batch-open:${previousBatchJob.id}`) : ""}
     </div></section>
     <section class="home-group"><h2 class="section-title">学习记录</h2><div class="stack">
       <div class="grid">${button("错题", "wrong")}${button("收藏", "favorites")}</div>
@@ -607,10 +631,9 @@ function answerText(q:QuestionInput){ if(q.options){const ids=Array.isArray(q.an
 function resultPanel(q:QuestionInput){const answer=q.options?"":`<div class="multiline"><b>正确答案：</b>${esc(answerText(q))}</div>`;return `<section class="answer-panel"><h3>${pageState.pendingManual?"请自行判断":pageState.correct?"回答正确":"回答错误"}</h3>${answer}${explanation(q)}</section>`;}
 async function persistDraft(){if(!activeSession)return; await saveSession(activeSession.id,activeSession.current_index,{...pageState,selection:[...selection],excludedOptions:[...excludedOptions],blankValue,quickMode});}
 async function submit(){ if(!activeSession)return; const row=activeRows[activeSession.current_index],q=parseQuestion(row); let correct=false; const answer=q.type==="blank"?blankValue:[...selection];
-  if(q.type==="single_choice")correct=selection.has(q.answer as string);
-  if(q.type==="multiple_choice"){const expected=[...(q.answer as string[])].sort();const got=[...selection].sort();correct=JSON.stringify(expected)===JSON.stringify(got);}
-  if(q.type==="blank"&&blankValue!==q.answer){pageState={pendingManual:true};await persistDraft();return quizView();}
-  if(q.type==="blank")correct=true; await record(row.id,answer,"auto",correct);
+  const grade=gradeQuestion(q,answer);
+  if(grade===null){pageState={pendingManual:true};await persistDraft();return quizView();}
+  correct=grade; await record(row.id,answer,"auto",correct);
 }
 async function record(questionId:string,answer:unknown,grading:string,correct:boolean){
   if(!activeSession)return;
@@ -806,8 +829,9 @@ async function listView(kind:ListKind) {
   }
   if(kind==="wrong"){
     const rows=await wrongQuestions();
-    const actions=`${button("导出错题 JSON","export-error-review")}${rows.some(graded)?button(`练习 ${rows.filter(graded).length} 题`,`practice:wrong`):""}`;
-    const body=rows.map(r=>{const q=parseQuestion(r);const difference=q.type==="multiple_choice"?multipleChoiceDifference(q,r.latest_user_answer):`<b>本次错误答案</b><div class="multiline">${esc(storedUserAnswerText(q,r.latest_user_answer))}</div>`;const extra=`<section class="expanded-meta wrong-meta">${difference}<small>${esc(r.latest_answered_at)}</small></section>`;return expandableCard("wrong",r,"","",extra)}).join("");
+    const previousBatch=await latestBatchJob();
+    const actions=`${button("导出","export-error-review")}${button("批量回炉","batch-new")}${rows.some(graded)?button("练习","practice:wrong"):""}${previousBatch?button("继续批量任务",`batch-open:${previousBatch.id}`):""}`;
+    const body=rows.map(r=>{const q=parseQuestion(r);const difference=q.type==="multiple_choice"?multipleChoiceDifference(q,r.latest_user_answer):`<b>本次错误答案</b><div class="multiline">${esc(storedUserAnswerText(q,r.latest_user_answer))}</div>`;const extra=`<section class="expanded-meta wrong-meta">${difference}<small>${esc(r.latest_answered_at)}</small></section>`;return expandableCard("wrong",r,"",button("AI 回炉",`ai-review:${encodeURIComponent(r.id)}`),extra)}).join("");
     return shell("当前错题",rows.length?`${actions}<div class="question-list compact-list">${body}</div>`:emptyState("暂无错题","答错的题目会显示在这里。",{text:"去学习",id:"scope"}),true,rows.length?listHeaderToggle("wrong",rows.map(r=>r.id)):"");
   }
   const rows=await favoriteQuestions();
@@ -830,6 +854,344 @@ async function saveJsonFile(filename:string,data:unknown,title:string){
     catch { notify("导出失败，请重试"); }
   }
 }
+async function tempGroupsView(): Promise<void> {
+  const groups = await listTempGroups();
+  const cards = groups.map(group => {
+    const total = tempBank(group).questions.length;
+    const progress = group.completed_at ? "已完成" : `${Math.min(group.current_index + 1,total)} / ${total}`;
+    return `<section class="card"><h2>${esc(group.source_question_title)}</h2><p>${esc(group.source_question_id === "batch" ? "批量题组" : `原题 ${group.source_question_id}`)} · ${esc(group.model)} · ${esc(formatUpdatedAt(group.updated_at))}</p><p>临时练习 ${progress}</p><div class="bottom-actions">${button(group.completed_at ? "重新刷" : group.current_index ? "继续刷" : "开始刷", `temp-open:${group.id}`, "primary")}${group.completed_at ? "" : button("从头开始", `temp-restart:${group.id}`)}${button("删除题组", `temp-delete:${group.id}`, "destructive-action")}</div></section>`;
+  }).join("");
+  shell("AI 回炉题组", groups.length ? `<div class="stack">${cards}</div>` : emptyState("暂无临时题组", "在当前错题中生成并保存候选变式题后，可从这里开始刷题。", {text:"查看当前错题",id:"wrong"}));
+}
+
+async function tempSessionView(id: string): Promise<void> {
+  const group = await getTempGroup(id);
+  if (!group) { shell("AI 回炉题组", emptyState("题组已删除或不存在", "返回临时题组列表。", {text:"查看临时题组",id:"temp-groups"})); return; }
+  const questions = tempBank(group).questions, index = group.current_index, results = tempResults(group);
+  if (group.completed_at || index >= questions.length) {
+    const correct = results.filter(x => x.correct).length;
+    shell("临时练习完成", `<div class="empty finish-page"><div class="finish">✓</div><h2>完成了 ${questions.length} 题</h2><p>答对 ${correct} 题。临时作答仅保存在本题组。</p>${button("重新刷",`temp-restart:${id}`,"primary")}${button("查看临时题组","temp-groups")}</div>`);
+    return;
+  }
+  const q = questions[index], state = tempState(group);
+  let content = `<div class="type">${q.type === "single_choice" ? "单选题" : q.type === "multiple_choice" ? "多选题" : "填空题"}</div><h2 class="stem">${esc(q.stem)}</h2>`;
+  if (q.options) content += `<div class="options">${q.options.map(o => `<button class="option ${state.selection.includes(o.id) ? "selected" : ""} ${state.submitted ? (Array.isArray(q.answer) ? q.answer : [q.answer]).includes(o.id) ? "right" : state.selection.includes(o.id) ? "wrong" : "" : ""}" data-action="temp-option:${esc(o.id)}" ${state.submitted || state.pendingManual ? "disabled" : ""}><b>${esc(o.id)}</b><span>${esc(o.text)}</span></button>`).join("")}</div>`;
+  if (q.type === "blank") content += `<input id="temp-blank" class="blank" placeholder="输入答案" value="${esc(state.blank)}" ${state.submitted || state.pendingManual ? "disabled" : ""}>`;
+  if (state.submitted || state.pendingManual) content += `<section class="answer-panel"><h3>${state.pendingManual ? "请自行判断" : state.correct ? "回答正确" : "回答错误"}</h3><div class="multiline"><b>正确答案：</b>${esc(answerText(q))}</div>${explanation(q)}</section>`;
+  const controls = state.pendingManual
+    ? `${button("判为错误","temp-manual:false","grading-wrong")}${button("判为正确","temp-manual:true","primary")}`
+    : state.submitted
+      ? button(index + 1 === questions.length ? "完成" : "下一题","temp-next","primary")
+      : `<button class="primary" data-action="temp-submit" ${q.type === "blank" ? state.blank.trim() ? "" : "disabled" : state.selection.length ? "" : "disabled"}>提交答案</button>`;
+  shell(`临时练习 ${index + 1} / ${questions.length}`, `<article class="quiz">${content}</article><p>${esc(group.source_question_id === "batch" ? group.source_question_title : `源自原题 ${group.source_question_id}`)} · ${esc(group.model)}</p>${button("返回题组列表","temp-groups")}<div class="bottom-actions">${controls}</div>`, true);
+  const blank = document.querySelector<HTMLInputElement>("#temp-blank");
+  if (blank) blank.oninput = () => {
+    const value = blank.value;
+    const submit = document.querySelector<HTMLButtonElement>('[data-action="temp-submit"]');
+    if (submit) submit.disabled = !value.trim();
+    void getTempGroup(id).then(current => {
+      if (current && current.current_index === index) {
+        const draft = tempState(current);
+        if (!draft.submitted && !draft.pendingManual) { draft.blank = value; return saveTempProgress(current,index,draft,tempResults(current)); }
+      }
+    }).catch(err => notify(err instanceof Error ? err.message : String(err)));
+  };
+}
+
+async function saveAiTempGroup(): Promise<void> {
+  const questionId = aiRouteQuestionId(), preview = aiPreview;
+  if (!questionId || !preview || preview.questionId !== questionId || aiSavingGroup) return;
+  aiSavingGroup = true;
+  try {
+  const row = (await getQuestions([questionId]))[0];
+  if (!row) return notify("原题已不存在，请返回当前错题");
+  const title = questionLead(parseQuestion(row));
+  const id = await createTempGroup(preview.bank,questionId,title,preview.model,preview.generatedAt);
+  aiPreview = null;
+  await navigate({view:"temp-session",id});
+  } finally { aiSavingGroup = false; }
+}
+
+async function tempAnswer(correct: boolean, grading: "auto" | "manual"): Promise<void> {
+  const route = history.state as Route;
+  if (route.view !== "temp-session") return;
+  const group = await getTempGroup(route.id);
+  if (!group || group.completed_at) return tempSessionView(route.id);
+  const q = tempBank(group).questions[group.current_index], state = tempState(group);
+  if (!q || state.submitted) return;
+  if (grading === "manual" && !state.pendingManual) return;
+  const answer = q.type === "blank" ? state.blank : state.selection;
+  const results = tempResults(group);
+  results.push({questionId:q.id,answer,correct,grading});
+  state.pendingManual = false; state.submitted = true; state.correct = correct;
+  await saveTempProgress(group,group.current_index,state,results);
+  await tempSessionView(route.id);
+}
+
+let batchRunningJobId: string | null = null;
+let batchCurrentRequestId: string | null = null;
+let batchCancelRequested = false;
+let batchSavingReady = false;
+
+function batchRouteId(): string | null {
+  const route = history.state as Route;
+  return route?.view === "batch-review" ? route.id ?? null : null;
+}
+async function batchReviewView(id?: string): Promise<void> {
+  const route = history.state as Route;
+  if (route.view !== "batch-review" || route.id !== id) return;
+  const status = await invoke<AiConfigStatus>("get_ai_config_status");
+  if ((history.state as Route).view !== "batch-review") return;
+  const config = status.configured
+    ? `<p>DeepSeek V4.1 Flash 已配置，API Key 已保存在本机应用数据中。</p>${button("清除已保存配置","batch-clear-config")}`
+    : `<p>使用 DeepSeek V4.1 Flash。填写一次 API Key，重启后仍可使用。</p>`;
+  const settings = `<details class="card ai-settings" ${status.configured ? "" : "open"}><summary>AI API 配置</summary>${config}<label>API Key<input id="batch-api-key" type="password" placeholder="${status.configured ? "填写新 Key 可替换" : "填写 DeepSeek API Key"}" autocomplete="off"></label>${button(status.configured ? "更换 API Key" : "保存 API Key","batch-save-config","primary")}</details>`;
+  if (!id) {
+    const review = await buildCurrentWrongReview();
+    const sourceCount=review.items.length, batches=Math.ceil(sourceCount / SOURCES_PER_BATCH);
+    const body = sourceCount
+      ? `<section class="card"><h2>批量回炉当前错题</h2><p>${sourceCount} 道原题，预计 ${sourceCount * GENERATED_PER_SOURCE} 道候选题，共 ${batches} 批。每批最多 ${SOURCES_PER_BATCH} 道原题；每次最多处理 ${MAX_SOURCES_PER_RUN} 道原题（${MAX_SOURCES_PER_RUN * GENERATED_PER_SOURCE} 道候选题），顺序请求。超过上限可分次继续。</p><p>每道原题调用一次 AI API，可能产生费用。只有完整校验通过的批次才能保存为临时题组。</p>${button("确认并创建批量任务","batch-create","primary")}</section>`
+      : emptyState("暂无当前错题","答错的题目会显示在这里。",{text:"返回当前错题",id:"wrong"});
+    shell("批量 AI 回炉",settings+body);
+    return;
+  }
+  const job = await getBatchJob(id);
+  if (!job) { shell("批量 AI 回炉",emptyState("任务已删除","请重新从当前错题发起。",{text:"返回当前错题",id:"wrong"})); return; }
+  const batches=jobBatches(job);
+  let repaired=false;
+  for(const batch of batches)if(batch.savedGroupId && !(await getTempGroup(batch.savedGroupId))){delete batch.savedGroupId;repaired=true;}
+  if(repaired)await saveBatchJob(job,batches);
+  const ready=batches.filter(b=>b.status==="ready"), saved=ready.filter(b=>!!b.savedGroupId), failed=batches.filter(b=>b.status==="failed"), pending=batches.filter(b=>b.status==="pending");
+  const running=batchRunningJobId===id, modelMatch=status.configured && status.model===job.model;
+  const list=batches.map((batch,index)=>{
+    const label=batch.savedGroupId?"已保存":batch.status==="ready"?"已校验":batch.status==="failed"?"失败":"待生成";
+    const controls=batch.status==="failed" && !running ? button("重试此批",`batch-retry:${index}`) : "";
+    const preview=Object.entries(batch.banks).map(([key,bank])=>`<section><h4>原题 ${esc(JSON.parse(key)[1])}</h4>${bank.questions.map((q,i)=>`<div class="card"><h4>变式 ${i+1}</h4>${reviewQuestionPreview(q)}</div>`).join("")}</section>`).join("");
+    return `<section class="card"><h3>第 ${index+1} 批 · ${batch.sourceKeys.length} 道原题 · ${label}</h3><p>已校验 ${Object.keys(batch.banks).length} / ${batch.sourceKeys.length} 道原题</p>${batch.error?`<p class="message error">${esc(batch.error)}</p>`:""}${preview?`<details><summary>核对已生成的候选题</summary>${preview}</details>`:""}${controls}</section>`;
+  }).join("");
+  const unsaved=ready.filter(b=>!b.savedGroupId).length;
+  const controls=`${!running && modelMatch && (pending.length||failed.length) ? button("继续生成（本次最多 12 道原题）","batch-run","primary") : ""}${running ? `<p role="status">正在生成；已通过校验的批次会保留。</p>${button("取消本次生成","batch-cancel")}` : ""}${unsaved && !running ? button(`保存 ${unsaved} 个已校验批次并开始刷`,"batch-save-ready","primary") : ""}${saved.length ? button("查看临时题组","temp-groups") : ""}${!running ? button("删除批量任务","batch-delete","destructive-action") : ""}`;
+  const warning=!status.configured ? `<p class="message error">请先填写 DeepSeek API Key。</p>` : !modelMatch ? `<p class="message error">此旧任务使用 ${esc(job.model)}；已校验批次仍可保存。未生成的错题请创建新的 DeepSeek 批量任务。</p>${button("新建批量任务","batch-new")}` : "";
+  shell("批量 AI 回炉",`<section class="card"><h2>任务进度</h2><p>${batches.length} 批 · 已校验 ${ready.length} · 已保存 ${saved.length} · 失败 ${failed.length} · 待生成 ${pending.length}</p><p>生成结果保存在本机。退出或重启后可继续，取消仅停止正在进行的请求。</p>${warning}${controls}</section>${settings}<div class="stack">${list}</div>`);
+}
+async function saveBatchConfig(): Promise<void> {
+  const route=history.state as Route; if(route.view!=="batch-review")return;
+  const apiKey=document.querySelector<HTMLInputElement>("#batch-api-key")?.value??"";
+  if(!apiKey.trim())return notify("请填写 DeepSeek API Key");
+  await invoke("set_ai_config",{apiKey});
+  await batchReviewView(route.id);
+}
+async function createBatchReviewJob(): Promise<void> {
+  const review=await buildCurrentWrongReview();
+  if(!review.items.length)return notify("当前没有错题");
+  const status=await invoke<AiConfigStatus>("get_ai_config_status");
+  if(!status.configured||!status.model)return notify("请先配置 AI API");
+  const total=review.items.length;
+  if(!confirm(`将为 ${total} 道当前错题生成约 ${total*GENERATED_PER_SOURCE} 道候选题，共 ${Math.ceil(total/SOURCES_PER_BATCH)} 批。每道原题调用一次 AI API，可能产生费用；本次最多请求 ${MAX_SOURCES_PER_RUN} 道原题。确认创建任务？`))return;
+  const id=await createBatchJob(review,status.model);
+  await navigate({view:"batch-review",id},true);
+  await runBatchReview(id);
+}
+async function runBatchReview(id:string, onlyIndex?:number): Promise<void> {
+  if(batchRunningJobId)return;
+  const job=await getBatchJob(id); if(!job)return;
+  const status=await invoke<AiConfigStatus>("get_ai_config_status");
+  if(!status.configured||status.model!==job.model)return notify(`请配置任务使用的模型 ${job.model}`);
+  const review=jobReview(job), itemByKey=new Map(review.items.map(item=>[sourceKey(item.bank.id,item.question.id),item]));
+  const originalContent=new Set(review.items.map(item=>candidateFingerprint(item.question)));
+  const batches=jobBatches(job); let requested=0;
+  batchRunningJobId=id; batchCancelRequested=false;
+  await batchReviewView(id);
+  try {
+    for(let index=0;index<batches.length;index++) {
+      if(batchCancelRequested)break;
+      if(onlyIndex!==undefined && index!==onlyIndex)continue;
+      const batch=batches[index];
+      if(batch.status==="ready")continue;
+      const missing=batch.sourceKeys.filter(key=>!batch.banks[key]);
+      if(requested+missing.length>MAX_SOURCES_PER_RUN)break;
+      batch.error="";
+      try {
+        for(const key of missing) {
+          if(batchCancelRequested)break;
+          const item=itemByKey.get(key); if(!item)throw new Error("原题来源不存在");
+          const latest=await buildCurrentWrongReview();
+          if(!latest.items.some(x=>sourceKey(x.bank.id,x.question.id)===key))throw new Error("原题已不是当前错题，请重新发起任务");
+          const requestId=crypto.randomUUID();
+          batchCurrentRequestId=requestId; requested++;
+          const input={review:{...review,items:[item]},sourceContext:[],generationOptions:{count:2}};
+          const response=await invoke<string>("generate_ai_review",{requestId,input});
+          batchCurrentRequestId=null;
+          if(batchCancelRequested)break;
+          const seen=checkedCandidateIds(batches,key);
+          const bank=parseAiReviewBank(response,item,seen.ids);
+          for(const question of bank.questions) {
+            const fingerprint=candidateFingerprint(question);
+            if(seen.fingerprints.has(fingerprint)||originalContent.has(fingerprint))throw new Error("候选题与其他批次或原题重复");
+          }
+          const existing=await (await db()).select<{external_id:string}[]>("SELECT external_id FROM questions WHERE external_id IN ($1,$2)",bank.questions.map(q=>q.id));
+          if(existing.length)throw new Error(`题目 ID 已存在：${existing.map(x=>x.external_id).join("、")}`);
+          batch.banks[key]=bank;
+          batch.generatedAtBySource={...(batch.generatedAtBySource??{}),[key]:new Date().toISOString()};
+          await saveBatchJob(job,batches);
+          await batchReviewView(id);
+        }
+        if(batchCancelRequested)break;
+        batch.status="ready";
+        await saveBatchJob(job,batches);
+      } catch(error) {
+        if(batchCancelRequested)break;
+        batch.status="failed";
+        batch.error=error instanceof Error?error.message:String(error);
+        await saveBatchJob(job,batches);
+      }
+      await batchReviewView(id);
+    }
+  } finally {
+    batchCurrentRequestId=null; batchRunningJobId=null; batchCancelRequested=false;
+    await batchReviewView(id);
+  }
+}
+async function cancelBatchReview(): Promise<void> {
+  batchCancelRequested=true;
+  if(batchCurrentRequestId)await invoke("cancel_ai_review",{requestId:batchCurrentRequestId}).catch(()=>{});
+}
+async function saveReadyBatches(): Promise<void> {
+  const id=batchRouteId(); if(!id||batchSavingReady||batchRunningJobId)return;
+  batchSavingReady=true;
+  try {
+  const job=await getBatchJob(id); if(!job)return;
+  const batches=jobBatches(job), collected=collectReadyCandidates(job,batches);
+  if(!collected.bank.questions.length)return notify("暂无可保存的完整批次");
+  const existing=await (await db()).select<{external_id:string}[]>(`SELECT external_id FROM questions WHERE external_id IN (${collected.bank.questions.map((_,i)=>`$${i+1}`).join(",")})`,collected.bank.questions.map(q=>q.id));
+  if(existing.length)return notify("有候选题 ID 已进入正式题库，请重新生成冲突批次");
+  const sourceCount=new Set(collected.metadata.map(x=>x.derivedFrom)).size;
+  const groupId=await createTempGroupWithMetadata(collected.bank,"batch",`批量回炉 · ${sourceCount} 道原题`,job.model,new Date().toISOString(),collected.metadata);
+  for(const index of collected.batchIndexes)batches[index].savedGroupId=groupId;
+  await saveBatchJob(job,batches);
+  await navigate({view:"temp-session",id:groupId});
+  } finally { batchSavingReady=false; }
+}
+
+interface AiConfigStatus { configured: boolean; baseUrl: string | null; model: string | null }
+let aiPendingRequestId: string | null = null;
+let aiReviewError = "";
+let aiPreview: { questionId: string; bank: BankFile; model: string; generatedAt: string } | null = null;
+let aiSavingGroup = false;
+
+function aiRouteQuestionId(): string | null {
+  const route = history.state as Route;
+  return route?.view === "ai-review" ? route.questionId : null;
+}
+
+async function aiReviewView(questionId: string): Promise<void> {
+  const row = (await getQuestions([questionId]))[0];
+  if (aiRouteQuestionId() !== questionId) return;
+  if (!row) {
+    shell("AI 回炉", emptyState("原题已不存在", "请返回当前错题重新选择。"));
+    return;
+  }
+  const status = await invoke<AiConfigStatus>("get_ai_config_status");
+  if (aiRouteQuestionId() !== questionId) return;
+  const original = parseQuestion(row);
+  const preview = aiPreview?.questionId === questionId ? aiPreview : null;
+  const pending = !!aiPendingRequestId;
+  const config = status.configured
+    ? `<p class="ai-config-status">DeepSeek V4.1 Flash 已配置，API Key 已保存在本机应用数据中。</p>${button("清除已保存配置", "ai-clear-config")}`
+    : `<p class="ai-config-status">使用 DeepSeek V4.1 Flash。填写一次 API Key，重启后仍可使用。</p>`;
+  const settings = `<details class="card ai-settings" ${status.configured ? "" : "open"}><summary>AI API 配置</summary>${config}<label>API Key<input id="ai-api-key" type="password" placeholder="${status.configured ? "填写新 Key 可替换" : "填写 DeepSeek API Key"}" autocomplete="off"></label>${button(status.configured ? "更换 API Key" : "保存 API Key", "ai-save-config", "primary")}</details>`;
+  const result = preview
+    ? `<section class="ai-preview"><h2>候选变式题</h2><p>生成于 ${esc(preview.generatedAt)} · ${esc(preview.model)} · 源自原题 ${esc(original.id)}</p>${preview.bank.questions.map((q, index) => `<section class="card"><h3>第 ${index + 1} 题</h3>${reviewQuestionPreview(q)}</section>`).join("")}<p>请人工核对题目与答案。保存后可作为独立临时题组练习，不会加入正式题库。</p>${button("保存并开始刷", "ai-save-group", "primary")}</section>`
+    : "";
+  const controls = pending
+    ? `<p role="status">正在生成，请稍候…</p>${button("取消生成", "ai-cancel")}`
+    : button(preview ? "重新生成 2 题" : "生成 2 道变式题", "ai-generate", "primary");
+  shell("AI 回炉", `<section class="card"><span class="type">${questionTypeLabel(original)}</span><h2 class="stem">${esc(questionLead(original))}</h2><p>本次将使用这道当前错题的题目、答案、错误信息和作答统计。</p></section>${settings}<section class="card">${controls}<div id="message" class="message ${aiReviewError ? "error" : ""}" role="alert">${esc(aiReviewError)}</div></section>${result}`);
+}
+
+async function saveAiConfig(): Promise<void> {
+  const questionId = aiRouteQuestionId();
+  if (!questionId) return;
+  const apiKey = document.querySelector<HTMLInputElement>("#ai-api-key")?.value ?? "";
+  if (!apiKey.trim()) {
+    message("请填写 DeepSeek API Key", "error");
+    return;
+  }
+  try {
+    await invoke("set_ai_config", {apiKey});
+    aiReviewError = "";
+    aiPreview = null;
+    await aiReviewView(questionId);
+  } catch (error) {
+    message(String(error), "error");
+  }
+}
+
+async function clearAiConfig(): Promise<void> {
+  const questionId = aiRouteQuestionId();
+  if (!questionId) return;
+  await invoke("clear_ai_config");
+  aiPreview = null;
+  aiReviewError = "";
+  await aiReviewView(questionId);
+}
+
+async function generateAiReview(): Promise<void> {
+  const questionId = aiRouteQuestionId();
+  if (!questionId || aiPendingRequestId) return;
+  const row = (await getQuestions([questionId]))[0];
+  if (!row) { aiReviewError = "原题已不存在"; return aiReviewView(questionId); }
+  const review = await buildCurrentWrongReview();
+  const original = review.items.find(item => item.bank.id === row.bank_id && item.question.id === row.external_id);
+  if (!original) {
+    aiReviewError = "这道题已不是当前错题，请返回列表刷新";
+    return aiReviewView(questionId);
+  }
+  const status = await invoke<AiConfigStatus>("get_ai_config_status");
+  if (!status.configured) {
+    aiReviewError = "请先配置 AI API";
+    return aiReviewView(questionId);
+  }
+  const requestId = crypto.randomUUID();
+  aiPendingRequestId = requestId;
+  aiReviewError = "";
+  aiPreview = null;
+  await aiReviewView(questionId);
+  try {
+    const input = {review: {...review, items: [original]}, sourceContext: [], generationOptions: {count: 2}};
+    const response = await invoke<string>("generate_ai_review", {requestId, input});
+    if (aiPendingRequestId !== requestId || aiRouteQuestionId() !== questionId) return;
+    const latest = await buildCurrentWrongReview();
+    if (!latest.items.some(item => item.bank.id === row.bank_id && item.question.id === row.external_id)) {
+      throw new Error("生成期间原题状态已变化，请重新选择当前错题");
+    }
+    const bank = parseAiReviewBank(response, original, new Set());
+    const existing = await (await db()).select<{external_id: string}[]>(
+      "SELECT external_id FROM questions WHERE external_id IN ($1,$2)",
+      bank.questions.map(q => q.id)
+    );
+    if (existing.length) throw new Error(`题目 ID 已存在：${existing.map(q => q.external_id).join("、")}`);
+    aiPreview = {questionId, bank, model: status.model ?? "", generatedAt: new Date().toISOString()};
+  } catch (error) {
+    if (aiPendingRequestId === requestId) aiReviewError = error instanceof Error ? error.message : String(error);
+  } finally {
+    if (aiPendingRequestId === requestId) {
+      aiPendingRequestId = null;
+      if (aiRouteQuestionId() === questionId) await aiReviewView(questionId);
+    }
+  }
+}
+
+async function cancelAiReview(): Promise<void> {
+  const requestId = aiPendingRequestId;
+  const questionId = aiRouteQuestionId();
+  if (!requestId || !questionId) return;
+  aiPendingRequestId = null;
+  aiReviewError = "已取消生成";
+  await invoke("cancel_ai_review", {requestId});
+  await aiReviewView(questionId);
+}
+
 async function exportWrongReview(){
   const review=await buildCurrentWrongReview(); if(!review.items.length){notify("暂无当前错题");return;}
   const date=new Date().toISOString().slice(0,10); await saveJsonFile(`knoop-error-review-${date}.json`,review,"Knoop 错题回炉");
@@ -858,8 +1220,28 @@ app.addEventListener("click",async e=>{const target=(e.target as HTMLElement).cl
     if(action==="presets")return navigate({view:"presets"});
     if(action==="wrong"||action==="favorites"||action==="killed"||action==="notes"||action==="reviews")return navigate({view:"list",kind:action});
     if(action==="stats")return navigate({view:"stats"});
+    if(action==="temp-groups")return navigate({view:"temp-groups"});
+    if(action.startsWith("temp-open:")){const id=action.slice(10);const group=await getTempGroup(id);if(!group)return tempGroupsView();if(group.completed_at)await restartTempGroup(group);return navigate({view:"temp-session",id});}
+    if(action.startsWith("temp-restart:")){const id=action.slice(13);const group=await getTempGroup(id);if(!group)return tempGroupsView();await restartTempGroup(group);return navigate({view:"temp-session",id});}
+    if(action.startsWith("temp-delete:")){const id=action.slice(12);if(!confirm("删除这个临时回炉题组及其练习进度？"))return;await deleteTempGroup(id);notify("已删除临时题组","ok");return navigate({view:"temp-groups"},true);}
     if(action.startsWith("filter-type:")){const type=action.slice("filter-type:".length) as BrushType;if(!brushTypes.includes(type))return;enabledBrushTypes.has(type)?enabledBrushTypes.delete(type):enabledBrushTypes.add(type);saveBrushTypes();return home();}
     if(action==="export-error-review")return exportWrongReview();
+    if(action==="batch-new")return navigate({view:"batch-review"});
+    if(action.startsWith("batch-open:"))return navigate({view:"batch-review",id:action.slice(11)});
+    if(action==="batch-save-config")return saveBatchConfig();
+    if(action==="batch-clear-config"){await invoke("clear_ai_config");const route=history.state as Route;if(route.view==="batch-review")return batchReviewView(route.id);return;}
+    if(action==="batch-create")return createBatchReviewJob();
+    if(action==="batch-run"){const id=batchRouteId();if(id)return runBatchReview(id);return;}
+    if(action.startsWith("batch-retry:")){const id=batchRouteId();if(id)return runBatchReview(id,Number(action.slice(12)));return;}
+    if(action==="batch-cancel")return cancelBatchReview();
+    if(action==="batch-save-ready")return saveReadyBatches();
+    if(action==="batch-delete"){const id=batchRouteId();if(!id)return;if(!confirm("删除这项批量回炉任务及未保存的候选题？已保存的临时题组会保留。"))return;await deleteBatchJob(id);return navigate({view:"list",kind:"wrong"},true);}
+    if(action.startsWith("ai-review:")){aiReviewError="";return navigate({view:"ai-review",questionId:decodeURIComponent(action.slice(10))});}
+    if(action==="ai-save-config")return saveAiConfig();
+    if(action==="ai-save-group")return saveAiTempGroup();
+    if(action==="ai-clear-config")return clearAiConfig();
+    if(action==="ai-generate")return generateAiReview();
+    if(action==="ai-cancel")return cancelAiReview();
     if(action==="export-repair-review")return exportRepairReview();
     if(action==="pick-import"){document.querySelector<HTMLInputElement>("#file")?.click();return;}
     if(action==="export-selected-banks")return exportSelectedBanks();
@@ -885,6 +1267,10 @@ app.addEventListener("click",async e=>{const target=(e.target as HTMLElement).cl
     if(action.startsWith("start-directory:")){const index=Number(action.slice("start-directory:".length));const route=history.state as Route;if(route.view!=="directory"||route.sessionId)return;const all=await questionsForScope(route.nodeIds??[]);const rows=route.kind==="memorization"?all.filter(q=>q.type==="memorization"):all.filter(isEnabledBrush);if(!rows.length||!Number.isInteger(index)||index<0||index>=rows.length)return;const mode=route.kind==="memorization"?"memorization":"sequential";const id=await createSession(mode,{nodeIds:route.nodeIds??[],order:"direct"},rows.map(r=>r.id),index);return navigate({view:"session",id});}
     if(action.startsWith("jump-session:")){const route=history.state as Route;const sessionId=route.view==="directory"&&route.sessionId?route.sessionId:activeSession?.id;if(!sessionId)return;const session=await sessionById(sessionId);if(!session)return;const ids=JSON.parse(session.question_ids_json) as string[];const index=Number(action.slice("jump-session:".length));if(!Number.isInteger(index)||index<0||index>=ids.length)return;const saved=JSON.parse(session.state_json||"{}") as {quickMode?:boolean};quickMode=!!saved.quickMode;const found=await getQuestions(ids);const byId=new Map(found.map(r=>[r.id,r]));activeRows=ids.map(id=>byId.get(id)).filter(Boolean) as QuestionRow[];selection.clear();excludedOptions.clear();blankValue="";pageState={};await saveSession(session.id,index,{quickMode});session.current_index=index;activeSession=session;return navigate({view:"session",id:session.id});}
     if(action.startsWith("delete-bank:")){const bankId=action.slice("delete-bank:".length);const bank=(await getBanks()).find(b=>b.id===bankId);if(!confirm(`删除题库“${bank?.title??bankId}”？\n\n该题库的题目、作答记录、收藏、审核、笔记和相关未完成进度都会一并删除。此操作不可撤销。`))return;const btn=target as HTMLButtonElement;const oldText=btn.textContent;btn.disabled=true;btn.textContent="删除中…";try{await deleteBank(bankId);notify("已删除题库","ok");return importView();}catch(err){btn.disabled=false;btn.textContent=oldText;throw err;}}
+    if(action.startsWith("temp-option:")){const route=history.state as Route;if(route.view!=="temp-session")return;const group=await getTempGroup(route.id);if(!group)return tempSessionView(route.id);const state=tempState(group),q=tempBank(group).questions[group.current_index],option=action.slice(12);if(!q||state.submitted||state.pendingManual||!q.options?.some(o=>o.id===option))return;if(q.type==="single_choice")state.selection=[option];else if(q.type==="multiple_choice")state.selection=state.selection.includes(option)?state.selection.filter(x=>x!==option):[...state.selection,option];await saveTempProgress(group,group.current_index,state,tempResults(group));return tempSessionView(route.id);}
+    if(action==="temp-submit"){const route=history.state as Route;if(route.view!=="temp-session")return;const group=await getTempGroup(route.id);if(!group)return tempSessionView(route.id);const state=tempState(group),q=tempBank(group).questions[group.current_index];if(!q||state.submitted||state.pendingManual)return;if(q.type==="blank")state.blank=document.querySelector<HTMLInputElement>("#temp-blank")?.value??state.blank;const answer=q.type==="blank"?state.blank:state.selection;if(q.type==="blank"?!state.blank.trim():!state.selection.length)return;const grade=gradeQuestion(q,answer);if(grade===null){state.pendingManual=true;await saveTempProgress(group,group.current_index,state,tempResults(group));return tempSessionView(route.id);}await saveTempProgress(group,group.current_index,state,tempResults(group));return tempAnswer(grade,"auto");}
+    if(action.startsWith("temp-manual:"))return tempAnswer(action.endsWith("true"),"manual");
+    if(action==="temp-next"){const route=history.state as Route;if(route.view!=="temp-session")return;const group=await getTempGroup(route.id);if(!group)return tempSessionView(route.id);const state=tempState(group);if(!state.submitted)return;const nextIndex=group.current_index+1;await saveTempProgress(group,nextIndex,emptyTempState(),tempResults(group),nextIndex>=tempBank(group).questions.length);return tempSessionView(route.id);}
     if(action==="toggle-quick"){quickMode=!quickMode;await persistDraft();return quizView();}
     if(action.startsWith("option:")&&!pageState.submitted){
       const id=action.slice(7); if(id===suppressOptionClickId&&Date.now()<suppressOptionClickUntil)return; const q=parseQuestion(activeRows[activeSession!.current_index]); excludedOptions.delete(id);
@@ -924,7 +1310,10 @@ app.addEventListener("click",async e=>{const target=(e.target as HTMLElement).cl
 
 window.addEventListener("popstate", e => {
   if(forcedBackTarget){const target=forcedBackTarget;forcedBackTarget=null;history.replaceState(target,"");void renderRoute(target);return;}
-  const route = isRoute(e.state) ? e.state : ({view:"home"} satisfies Route); void renderRoute(route);
+  const route = isRoute(e.state) ? e.state : ({view:"home"} satisfies Route);
+  if(route.view!=="ai-review"&&aiPendingRequestId){void invoke("cancel_ai_review",{requestId:aiPendingRequestId}).catch(()=>{});aiPendingRequestId=null;}
+  if((route.view!=="batch-review" || route.id!==batchRunningJobId)&&batchRunningJobId)void cancelBatchReview();
+  void renderRoute(route);
 });
 
 db().then(async()=>{ const route = isRoute(history.state) ? history.state : ({view:"home"} satisfies Route); await navigate(route, true); }).catch(err=>{shell("启动失败",`<div class="message error">${esc(err instanceof Error?err.message:String(err))}</div>`,false);});
