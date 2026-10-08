@@ -23,6 +23,11 @@ const database = {
   async select(sql, params) {
     if (sql.includes("WHERE id=$1")) return rows.has(params[0]) ? [structuredClone(rows.get(params[0]))] : [];
     return structuredClone([...rows.values()]);
+  },
+  async atomic(steps) {
+    const before=structuredClone(rows);
+    try {for(const step of steps){if(step.expectedRows!==undefined)assert.deepEqual(await database.select(step.sql,step.params),step.expectedRows);else await database.execute(step.sql,step.params);}}
+    catch(error){rows.clear();for(const [id,row] of before)rows.set(id,row);throw error;}
   }
 };
 globalThis.__knoopTestDb = database;
@@ -30,7 +35,7 @@ const mock = {
   name: "mock-db",
   setup(build) {
     build.onResolve({filter:/\.\/db$/}, args => args.importer.endsWith("temp-review.ts") ? {path:"mock-db",namespace:"mock"} : null);
-    build.onLoad({filter:/.*/,namespace:"mock"}, () => ({contents:"export const db = async () => globalThis.__knoopTestDb;",loader:"js"}));
+    build.onLoad({filter:/.*/,namespace:"mock"}, () => ({contents:"export const db = async () => globalThis.__knoopTestDb; export const atomicWrite = steps => globalThis.__knoopTestDb.atomic(steps);",loader:"js"}));
   }
 };
 const dir = await mkdtemp(join(tmpdir(),"knoop-temp-test-"));

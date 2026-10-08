@@ -1,4 +1,4 @@
-import { db, type AtomicStep } from "./db";
+import { db, atomicWrite, type AtomicStep } from "./db";
 import type { BankFile } from "./types";
 
 export interface TempAnswer {
@@ -63,3 +63,10 @@ export async function saveTempProgress(group: TempGroup, index: number, state: T
 }
 export async function restartTempGroup(group: TempGroup): Promise<void> { await saveTempProgress(group,0,emptyTempState(),[]); }
 export async function deleteTempGroup(id: string): Promise<void> { await (await db()).execute("DELETE FROM ai_review_groups WHERE id=$1", [id]); }
+export async function retryTempWrong(id:string):Promise<string|null>{
+  const group=await getTempGroup(id);if(!group?.completed_at)throw new Error("临时练习尚未完成");
+  const wrong=new Set(tempResults(group).filter(result=>!result.correct).map(result=>result.questionId)),bank=tempBank(group);bank.questions=bank.questions.filter(q=>wrong.has(q.id));if(!bank.questions.length)return null;
+  const metadata=JSON.parse(group.question_meta_json).filter((entry:{questionId:string})=>wrong.has(entry.questionId));
+  const prepared=prepareTempGroup(bank,group.source_question_id,`${group.source_question_title} · 错题重练`,group.model,group.generated_at,metadata);
+  await atomicWrite([{sql:"SELECT * FROM ai_review_groups WHERE id=$1",params:[id],expectedRows:[group]},prepared.step]);return prepared.id;
+}

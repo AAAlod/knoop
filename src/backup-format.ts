@@ -11,7 +11,8 @@ export const backupTables = {
   question_reviews: {question_id:"text",issues_json:"text",note:"text",question_snapshot_json:"text",was_killed_before:"flag",created_at:"text",updated_at:"text"},
   question_answer_revisions: {id:"positive",question_id:"text",last_attempt_id:"unsigned",previous_content_json:"text",updated_content_json:"text",changed_at:"text"},
   ai_review_groups: {id:"text",source_question_id:"text",source_question_title:"text",model:"text",generated_at:"text",created_at:"text",updated_at:"text",bank_json:"text",question_meta_json:"text",current_index:"unsigned",state_json:"text",results_json:"text",completed_at:"nullableText"},
-  ai_review_batch_jobs: {id:"text",model:"text",review_json:"text",batches_json:"text",created_at:"text",updated_at:"text"}
+  ai_review_batch_jobs: {id:"text",model:"text",review_json:"text",batches_json:"text",created_at:"text",updated_at:"text"},
+  ai_review_drafts: {id:"text",source_question_id:"text",source_question_title:"text",source_question_json:"text",bank_json:"text",model:"text",generated_at:"text",created_at:"text"}
 } as const;
 export type BackupTable = keyof typeof backupTables;
 export const preferenceKeys = ["knoop.scopeCollapsed.v1","knoop.enabledBrushTypes.v1","knoop.scopePresets.v2","knoop.recentScopePreset.v2"] as const;
@@ -19,7 +20,7 @@ export type Preferences = Record<typeof preferenceKeys[number],string|null>;
 export type BackupRow = Record<string,string|number|null>;
 export interface BackupFile {
   format:"knoop-backup";
-  version:"1.0";
+  version:"1.1";
   appVersion:string;
   exportedAt:string;
   tables:Record<BackupTable,BackupRow[]>;

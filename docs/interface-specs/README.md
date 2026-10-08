@@ -8,7 +8,7 @@ Knoop uses the following JSON formats:
 | `knoop-bundle` | Transfer multiple banks | 1.0 |
 | `knoop-error-review` | Export wrong answers for review | 1.0, 1.1 |
 | `knoop-repair-review` | Export marked questions for repair | 1.0, 1.1 |
-| `knoop-backup` | Restore complete learning state, including preferences | 1.0 |
+| `knoop-backup` | Restore complete learning state, including preferences and pending AI drafts | 1.0 (read), 1.1 (read/write) |
 
 The `schemas/` directory contains Draft 2020-12 JSON Schemas. The `docs/` directory explains field semantics and AI guidance. Small synthetic examples are in the repository's `examples/` directory.
 

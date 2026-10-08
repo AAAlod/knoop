@@ -30,12 +30,14 @@ const fixture={format:'knoop-bank',version:'1.1',import:{mode:'new',bankId:'knoo
 const results=[];
 async function check(id,task){try{const detail=await task();results.push({id,status:'PASS',...detail});console.log('PASS '+id);}catch(e){results.push({id,status:'FAIL',reason:e.message});console.log('FAIL '+id+': '+e.message.split('\n')[0]);}}
 async function sign(file){const {integrity,...payload}=file;file.integrity={algorithm:'SHA-256',digest:await f.backupDigest(payload)};return file;}
-const empty=()=>({format:'knoop-backup',version:'1.0',appVersion:'0.1.10',exportedAt:'2026-10-09T00:00:00.000Z',tables:Object.fromEntries(Object.keys(f.backupTables).map(key=>[key,[]])),counts:Object.fromEntries(Object.keys(f.backupTables).map(key=>[key,0])),sequences:{attempts:0,question_answer_revisions:0},preferences:Object.fromEntries(f.preferenceKeys.map(key=>[key,null]))});
+const empty=()=>({format:'knoop-backup',version:'1.1',appVersion:'0.1.10',exportedAt:'2026-10-09T00:00:00.000Z',tables:Object.fromEntries(Object.keys(f.backupTables).map(key=>[key,[]])),counts:Object.fromEntries(Object.keys(f.backupTables).map(key=>[key,0])),sequences:{attempts:0,question_answer_revisions:0},preferences:Object.fromEntries(f.preferenceKeys.map(key=>[key,null]))});
 await check('F08 backup schema/version/integrity and unknown secret fields',async()=>{
   const file=await sign(empty());await v.validateBackup(file);let bad=structuredClone(file);bad.preferences['knoop.enabledBrushTypes.v1']='["blank"]';await assert.rejects(()=>v.validateBackup(bad),/SHA-256/);
   bad=await sign({...empty(),apiKey:'synthetic-secret'});await assert.rejects(()=>v.validateBackup(bad),/结构/);
   bad=await sign({...empty(),version:'2.0'});await assert.rejects(()=>v.validateBackup(bad),/结构/);
   bad=await sign({...empty(),counts:{...empty().counts,banks:1}});await assert.rejects(()=>v.validateBackup(bad),/数量/);
+  const legacy=JSON.parse(await readFile('examples/sample-backup.json','utf8')),migrated=await v.validateBackup(legacy);assert.equal(migrated.version,'1.1');assert.deepEqual(migrated.tables.ai_review_drafts,[]);assert.deepEqual(legacy.version,'1.0');
+  legacy.tables.banks.push({});await assert.rejects(()=>v.validateBackup(legacy));
 });
 await check('F09 normal and AI structure rules agree, field errors are actionable',async()=>{
   const cases=[['extra field',bank=>bank.questions[0].unknown=1],['options wrong type',bank=>bank.questions[0].options='A'],['empty option',bank=>bank.questions[0].options[0].text=''],['duplicate ID',bank=>bank.questions[1].id=bank.questions[0].id],['orphan node',bank=>bank.questions[0].nodeId='absent'],['node cycle',bank=>bank.nodes[0].parentId='review'],['invalid answer',bank=>bank.questions[0].answer='Z']];
@@ -61,6 +63,7 @@ async function seed(){
   const review=await d.buildCurrentWrongReview(),jid=await b.createBatchJob(review,'synthetic-model');
   const job=await b.getBatchJob(jid),batches=b.jobBatches(job);const candidate=structuredClone(fixture);candidate.questions.forEach((q,i)=>{q.id=`candidate-${i}`;q.stem=`变式 ${i}`;});batches[0].status='ready';batches[0].banks[batches[0].sourceKeys[0]]=candidate;await b.saveBatchJob(job,batches);
   const gid=await b.saveReadyBatchCandidates(jid),group=await t.getTempGroup(gid);await t.saveTempProgress(group,1,t.emptyTempState(),[{questionId:'candidate-0',answer:['B'],correct:false,grading:'auto'}]);
+  await adapter.execute('INSERT INTO ai_review_drafts VALUES($1,$2,$3,$4,$5,$6,$7,$8)',['draft-1',rows[0].id,'合成原题',rows[0].content_json,JSON.stringify(candidate),'synthetic-model',new Date().toISOString(),new Date().toISOString()]);
   await d.saveReview(rows[1].id,['answer'],'合成审核');await d.toggleKilled(rows[0].id);await d.toggleFavorite(rows[0].id);await d.saveNote(rows[0].id,'合成笔记');await d.saveSession(sid,1,{selection:['A'],excludedOptions:['B'],quickMode:false,blankValue:'草稿'});
   await adapter.execute("UPDATE sqlite_sequence SET seq=100 WHERE name='attempts'");await adapter.execute("UPDATE sqlite_sequence SET seq=70 WHERE name='question_answer_revisions'");
   const storage=new MemoryStorage();storage.setItem('api-config','synthetic-key-must-not-export');storage.setItem(f.preferenceKeys[0],JSON.stringify([rows[0].node_id]));storage.setItem(f.preferenceKeys[1],'["single_choice","blank"]');storage.setItem(f.preferenceKeys[2],JSON.stringify([{id:'preset-1',name:'合成预设',ranges:[{nodeId:rows[0].node_id,includeDescendants:true}],types:['single_choice'],mode:'sequential',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}]));storage.setItem(f.preferenceKeys[3],'preset-1');return {storage,rows,sid};
@@ -76,6 +79,11 @@ if(hasBackup){
     const {storage}=await seed(),file=await backup.buildBackup(storage);
     const mutations=[x=>x.tables.questions[0].node_id='missing',x=>{x.tables.banks.push({...x.tables.banks[0]});x.counts.banks++;},x=>x.tables.sessions[0].current_index=99,x=>x.sequences.attempts=0,x=>x.tables.ai_review_groups[0].results_json=JSON.stringify([{questionId:'missing',answer:[],correct:true,grading:'auto'}]),x=>x.preferences[f.preferenceKeys[1]]='["bad"]'];
     for(const mutate of mutations){const bad=structuredClone(file);mutate(bad);await sign(bad);await assert.rejects(()=>v.validateBackup(bad));}
+  });
+  await check('A01 legacy 1.0 rich backup migrates without modifying the original or losing learning rows',async()=>{
+    const {storage}=await seed(),current=await backup.buildBackup(storage),legacy=structuredClone(current);legacy.version='1.0';delete legacy.tables.ai_review_drafts;delete legacy.counts.ai_review_drafts;await sign(legacy);const original=JSON.stringify(legacy);
+    const migrated=await v.validateBackup(legacy);assert.equal(JSON.stringify(legacy),original);assert.equal(migrated.version,'1.1');assert.deepEqual(migrated.tables.ai_review_drafts,[]);for(const key of Object.keys(legacy.tables))assert.deepEqual(migrated.tables[key],legacy.tables[key]);
+    await reset();const local=new MemoryStorage();await backup.restorePrepared(await backup.prepareRestore(legacy,local),local);const restored=await backup.buildBackup(local);assert.deepEqual(restored.tables,migrated.tables);assert.deepEqual(restored.sequences,legacy.sequences);assert.deepEqual(restored.preferences,legacy.preferences);
   });
   await check('F08 every database restore write failure restores previous SQLite and preferences',async()=>{
     let {storage}=await seed();const target=await backup.buildBackup(storage);await reset();storage=new MemoryStorage();let prepared=await backup.prepareRestore(target,storage);writeCount=0;await backup.restorePrepared(prepared,storage);const count=writeCount-1;
@@ -93,7 +101,7 @@ if(hasBackup){
   });
   await check('F08 committed restore survives final journal cleanup failure and retry',async()=>{
     const {storage}=await seed(),target=await backup.buildBackup(storage);await reset();const local=new MemoryStorage(),prepared=await backup.prepareRestore(target,local);
-    writeCount=0;faultAt=Object.values(target.counts).reduce((a,n)=>a+n,0)+18;await assert.rejects(()=>backup.restorePrepared(prepared,local),/Injected/);faultAt=0;
+    writeCount=0;faultAt=Object.values(target.counts).reduce((a,n)=>a+n,0)+Object.keys(f.backupTables).length+6;await assert.rejects(()=>backup.restorePrepared(prepared,local),/Injected/);faultAt=0;
     assert.equal((await adapter.select('SELECT committed FROM backup_preference_journal'))[0].committed,1);assert.equal(snapshot().questions.length,target.counts.questions);
     assert.equal(await backup.recoverPreferenceRestore(local),true);const result=await backup.buildBackup(local);assert.deepEqual(result.tables,target.tables);assert.deepEqual(result.preferences,target.preferences);
   });
@@ -147,7 +155,7 @@ if(process.argv.includes('--ui')){
       });
       await check('F08 committed cleanup failure blocks navigation until preferences recover',async()=>{
         const {storage}=await seed(),target=await backup.buildBackup(storage);await reset();await home();await chooseBackup(target);await page.locator('[data-action="backup-prepare"]').click();await page.locator('[data-action="backup-confirm"]').waitFor();
-        writeCount=0;faultAt=Object.values(target.counts).reduce((a,n)=>a+n,0)+18;page.once('dialog',dialog=>dialog.accept());await page.locator('[data-action="backup-confirm"]').click();await page.locator('[data-action="backup-sync"]').waitFor();faultAt=0;assert.equal(await page.locator('[data-action="home"]').count(),0);assert.equal(snapshot().questions.length,target.counts.questions);
+        writeCount=0;faultAt=Object.values(target.counts).reduce((a,n)=>a+n,0)+Object.keys(f.backupTables).length+6;page.once('dialog',dialog=>dialog.accept());await page.locator('[data-action="backup-confirm"]').click();await page.locator('[data-action="backup-sync"]').waitFor();faultAt=0;assert.equal(await page.locator('[data-action="home"]').count(),0);assert.equal(snapshot().questions.length,target.counts.questions);
         await page.evaluate(()=>{history.pushState({view:'import'},'');dispatchEvent(new PopStateEvent('popstate',{state:{view:'import'}}));});await page.locator('[data-action="backup-sync"]').waitFor();assert.equal(await page.locator('#file').count(),0);
         await page.locator('[data-action="backup-sync"]').click();await page.locator('.home-main').waitFor();assert.equal(snapshot().backup_preference_journal.length,0);assert.deepEqual(await page.evaluate(keys=>Object.fromEntries(keys.map(k=>[k,localStorage.getItem(k)])),f.preferenceKeys),target.preferences);
       });

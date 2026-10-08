@@ -10,4 +10,5 @@ const schema={
   $schema:'https://json-schema.org/draft/2020-12/schema',$id:'https://knoop.local/schemas/knoop-backup-v1.schema.json',title:'Knoop Backup 1.0',
   ...object({format:{const:'knoop-backup'},version:{const:'1.0'},appVersion:{type:'string',pattern:'^\\d+\\.\\d+\\.\\d+$'},exportedAt:{type:'string',minLength:1},tables:object(tables),counts:object(Object.fromEntries(Object.keys(tables).map(name=>[name,fields.unsigned]))),sequences:object({attempts:fields.unsigned,question_answer_revisions:fields.unsigned}),preferences:object(Object.fromEntries(preferenceKeys.map(key=>[key,fields.nullableText]))),integrity:object({algorithm:{const:'SHA-256'},digest:{type:'string',pattern:'^[0-9a-f]{64}$'}})})
 };
-writeFileSync('docs/interface-specs/schemas/knoop-backup-v1.schema.json',JSON.stringify(schema,null,2)+'\n');
+schema.$id='https://knoop.local/schemas/knoop-backup-v1.1.schema.json';schema.title='Knoop Backup 1.1';schema.properties.version.const='1.1';
+writeFileSync('docs/interface-specs/schemas/knoop-backup-v1.1.schema.json',JSON.stringify(schema,null,2)+'\n');

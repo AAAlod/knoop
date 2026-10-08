@@ -6,6 +6,8 @@ import { parseAiReviewBank } from "./ai-review";
 import { candidateFingerprint, checkedCandidateIds, createBatchJob, deleteBatchJob, GENERATED_PER_SOURCE, getBatchJob, jobBatches, jobReview, latestBatchJob, MAX_SOURCES_PER_RUN, saveBatchJob, saveReadyBatchCandidates, sourceKey, SOURCES_PER_BATCH } from "./batch-review";
 import { gradeQuestion } from "./grading";
 import {indexDirectory,searchDirectory,searchText,type DirectoryEntry} from "./directory-search";
+import {getAiDraft,latestAiDraft,listAiDrafts,saveAiDraft,deleteAiDraft,saveAiDraftToGroup} from "./ai-drafts";
+import {retryTempWrong} from "./temp-review";
 import { createTempGroup, deleteTempGroup, emptyTempState, getTempGroup, listTempGroups, restartTempGroup, saveTempProgress, tempBank, tempResults, tempState, type TempState } from "./temp-review";
 import { enqueueDraft, flushDrafts } from "./state-writes";
 import { buildBackup, prepareRestore, restorePrepared, recoverPreferenceRestore, type PreparedRestore } from "./backup";
@@ -95,12 +97,14 @@ type ReturnTarget =
   | { view: "stats" }
   | { view: "temp-groups" }
   | { view: "temp-session"; id: string }
+  | { view: "temp-review"; id: string }
+  | { view: "ai-drafts" }
   | { view: "batch-review"; id?: string };
 type Route = ReturnTarget
   | { view: "edit"; questionId: string; returnTo?: ReturnTarget }
   | { view: "note"; questionId: string }
   | { view: "review"; questionId: string }
-  | { view: "ai-review"; questionId: string };
+  | { view: "ai-review"; questionId: string; draftId?:string };
 
 const esc = (s: unknown) => String(s ?? "").replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c]!));
 const button = (text: string, action: string, cls = "") => `<button type="button" class="${cls}" data-action="${esc(action)}">${esc(text)}</button>`;
@@ -197,6 +201,7 @@ function isReturnTarget(value: unknown): value is ReturnTarget {
     case "stats":
     case "sessions":
     case "temp-groups":
+    case "ai-drafts":
       return true;
     case "choose":
       return (route.nodeIds === undefined || (Array.isArray(route.nodeIds) && route.nodeIds.every(x => typeof x === "string")))
@@ -210,6 +215,7 @@ function isReturnTarget(value: unknown): value is ReturnTarget {
       return route.id === undefined || (typeof route.id === "string" && route.id.length > 0);
     case "session":
     case "temp-session":
+    case "temp-review":
       return typeof route.id === "string" && route.id.length > 0;
     case "list":
       return ["wrong", "favorites", "killed", "notes", "reviews"].includes(String(route.kind));
@@ -252,6 +258,8 @@ async function renderRoute(route: Route): Promise<void> {
     case "stats": return statsView();
     case "temp-groups": return tempGroupsView();
     case "temp-session": return tempSessionView(route.id);
+    case "temp-review": return tempReviewView(route.id);
+    case "ai-drafts": return aiDraftsView();
     case "batch-review": return batchReviewView(route.id);
   }
 }
@@ -259,6 +267,7 @@ async function renderRoute(route: Route): Promise<void> {
 async function navigate(route: Route, replace = false): Promise<void> {
   await studyDone;
   await flushDrafts();
+  if(pendingAiPersistence)throw new Error("已校验候选尚未保存，请重试保存或明确丢弃后离开");
   if (replace) history.replaceState(route, "");
   else history.pushState(route, "");
   await renderRoute(route);
@@ -293,6 +302,7 @@ async function home() {
   activeSession = null; activeRows = []; selection.clear(); excludedOptions.clear(); blankValue = ""; quickMode = false; pageState = {};
   selectedScopeNodes.clear(); scopeNodesCache = []; scopeContentNodeIds.clear();
   const resume = await latestSession(); const summary = await librarySummary([...enabledBrushTypes]); const pendingReviews = (await reviewQuestions()).length; const tempGroupCount = (await listTempGroups()).length; const previousBatchJob = await latestBatchJob();
+  const pendingDraftCount=(await listAiDrafts()).length;
   const recent = scopePresets.find(p=>p.id===recentPresetId());
   const recentCard = recent ? `<section class="home-recent-preset"><div><small>最近组题</small><b>${esc(recent.name)}</b><span>${esc(presetSummary(recent))}</span></div><button type="button" data-action="start-preset:${esc(recent.id)}">开始</button></section>` : "";
   const filters = brushTypes.map(type => `<button class="type-filter ${enabledBrushTypes.has(type)?"active":""}" data-action="filter-type:${type}" aria-pressed="${enabledBrushTypes.has(type)}">${brushLabels[type]}</button>`).join("");
@@ -308,6 +318,7 @@ async function home() {
     </div></section>
     <section class="home-group"><h2 class="section-title">AI 回炉</h2><div class="stack">
       ${button(tempGroupCount ? `AI 回炉题组 ${tempGroupCount}` : "AI 回炉题组", "temp-groups")}
+      ${pendingDraftCount?button(`AI 待审核草稿 ${pendingDraftCount}`,"ai-drafts"):""}
       ${previousBatchJob ? button("继续批量回炉",`batch-open:${previousBatchJob.id}`) : ""}
     </div></section>
     <section class="home-group"><h2 class="section-title">学习记录</h2><div class="stack">
@@ -414,9 +425,9 @@ function reloadLearningState():void{
   activeSession=null;activeRows=[];selection.clear();excludedOptions.clear();blankValue="";pageState={};aiPreview=null;importQueue=[];importFeedback="";
 }
 function backupSummary(file:BackupFile):string{
-  const c=file.counts;return `<p>题库 ${c.banks} · 内容 ${c.questions} · 作答 ${c.attempts} · 会话 ${c.sessions}</p><p>笔记 ${c.notes} · 收藏 ${c.favorites} · 斩杀 ${c.killed_questions} · 待返修 ${c.question_reviews}</p><p>答案修订 ${c.question_answer_revisions} · 临时题组 ${c.ai_review_groups} · 批次任务 ${c.ai_review_batch_jobs}</p><p>来源版本 ${esc(file.appVersion)} · ${esc(formatUpdatedAt(file.exportedAt))}</p>`;
+  const c=file.counts;return `<p>题库 ${c.banks} · 内容 ${c.questions} · 作答 ${c.attempts} · 会话 ${c.sessions}</p><p>笔记 ${c.notes} · 收藏 ${c.favorites} · 斩杀 ${c.killed_questions} · 待返修 ${c.question_reviews}</p><p>答案修订 ${c.question_answer_revisions} · 临时题组 ${c.ai_review_groups} · 批次任务 ${c.ai_review_batch_jobs} · 待审核草稿 ${c.ai_review_drafts}</p><p>来源版本 ${esc(file.appVersion)} · ${esc(formatUpdatedAt(file.exportedAt))}</p>`;
 }
-function requireBackupIdle():void{if(batchRunningJobId||aiPendingRequestId||aiSavingGroup||batchSavingReady)throw new Error("请先结束正在运行的 AI 任务，再备份或恢复");}
+function requireBackupIdle():void{if(batchRunningJobId||batchStarting||batchCreating||aiStarting||aiPendingRequestId||aiSavingGroup||batchSavingReady||pendingAiPersistence)throw new Error("请先结束正在运行的 AI 任务并保存候选草稿，再备份或恢复");}
 async function backupView():Promise<void>{
   if(restoreSyncPending){shell("完成恢复设置",`<p>恢复操作的设置同步尚未完成，请重试完成同步后继续学习。</p><p class="message error">${esc(backupMessage)}</p>${button("重试设置同步","backup-sync","primary")}`,false);return;}
   let archives="";
@@ -1007,7 +1018,7 @@ async function tempGroupsView(): Promise<void> {
   const cards = groups.map(group => {
     const total = tempBank(group).questions.length;
     const progress = group.completed_at ? "已完成" : `${Math.min(group.current_index + 1,total)} / ${total}`;
-    return `<section class="card"><h2>${esc(group.source_question_title)}</h2><p>${esc(group.source_question_id === "batch" ? "批量题组" : `原题 ${group.source_question_id}`)} · ${esc(group.model)} · ${esc(formatUpdatedAt(group.updated_at))}</p><p>临时练习 ${progress}</p><div class="bottom-actions">${button(group.completed_at ? "重新刷" : group.current_index ? "继续刷" : "开始刷", `temp-open:${group.id}`, "primary")}${group.completed_at ? "" : button("从头开始", `temp-restart:${group.id}`)}${button("删除题组", `temp-delete:${group.id}`, "destructive-action")}</div></section>`;
+    return `<section class="card"><h2>${esc(group.source_question_title)}</h2><p>${esc(group.source_question_id === "batch" ? "批量题组" : `原题 ${group.source_question_id}`)} · ${esc(group.model)} · ${esc(formatUpdatedAt(group.updated_at))}</p><p>临时练习 ${progress}</p><div class="grid">${button(group.completed_at ? "重新刷" : group.current_index ? "继续刷" : "开始刷", `temp-open:${group.id}`, "primary")}${group.completed_at ? button("回顾结果", `temp-review:${group.id}`) : button("从头开始", `temp-restart:${group.id}`)}${button("删除题组", `temp-delete:${group.id}`, "destructive-action")}</div></section>`;
   }).join("");
   shell("AI 回炉题组", groups.length ? `<div class="stack">${cards}</div>` : emptyState("暂无临时题组", "在当前错题中生成并保存候选变式题后，可从这里开始刷题。", {text:"查看当前错题",id:"wrong"}));
 }
@@ -1018,7 +1029,7 @@ async function tempSessionView(id: string): Promise<void> {
   const questions = tempBank(group).questions, index = group.current_index, results = tempResults(group);
   if (group.completed_at || index >= questions.length) {
     const correct = results.filter(x => x.correct).length;
-    shell("临时练习完成", `<div class="empty finish-page"><div class="finish">✓</div><h2>完成了 ${questions.length} 题</h2><p>答对 ${correct} 题。临时作答仅保存在本题组。</p>${button("重新刷",`temp-restart:${id}`,"primary")}${button("查看临时题组","temp-groups")}</div>`);
+    shell("临时练习完成", `<div class="empty finish-page"><div class="finish">✓</div><h2>完成了 ${questions.length} 题</h2><p>答对 ${correct} 题。临时作答仅保存在本题组。</p>${button("回顾每题结果",`temp-review:${id}`,"primary")}${button("重新刷",`temp-restart:${id}`)}${button("查看临时题组","temp-groups")}</div>`);
     return;
   }
   const q = questions[index], state = tempState(group);
@@ -1061,10 +1072,7 @@ async function saveAiTempGroup(): Promise<void> {
   if (!questionId || !preview || preview.questionId !== questionId || aiSavingGroup) return;
   aiSavingGroup = true;
   try {
-  const row = (await getQuestions([questionId]))[0];
-  if (!row) return notify("原题已不存在，请返回当前错题");
-  const title = questionLead(parseQuestion(row));
-  const id = await createTempGroup(preview.bank,questionId,title,preview.model,preview.generatedAt);
+  const id=await saveAiDraftToGroup(preview.draftId);if(!id)return notify("草稿已保存或丢弃，请刷新待审核列表");
   aiPreview = null;
   await navigate({view:"temp-session",id});
   } finally { aiSavingGroup = false; }
@@ -1072,6 +1080,16 @@ async function saveAiTempGroup(): Promise<void> {
 
 async function tempAnswer(correct: boolean, grading: "auto" | "manual"): Promise<void> {
   return withStudyAction(()=>recordTempAnswer(correct,grading));
+}
+async function tempReviewView(id:string):Promise<void>{
+  const group=await getTempGroup(id);if(!group?.completed_at)return shell("临时结果回顾",emptyState("尚无完成结果","请先完成这组练习。",{text:"查看题组",id:"temp-groups"}));
+  const answers=new Map(tempResults(group).map(result=>[result.questionId,result]));
+  const cards=tempBank(group).questions.map((q,index)=>{const result=answers.get(q.id);return `<section class="card temp-review-result"><h2>第 ${index+1} 题 · ${result?result.correct?"正确":"错误":"未作答"}</h2><p>本次作答：${esc(result?Array.isArray(result.answer)?result.answer.join("、"):result.answer:"无")}</p><p>标准答案：${esc(answerText(q))}</p>${reviewQuestionPreview(q)}</section>`;}).join("");
+  const wrong=[...answers.values()].filter(result=>!result.correct).length;
+  shell("临时结果回顾",`<p>${esc(group.source_question_title)} · 本组错题 ${wrong} 道，保留原练习记录和来源。</p>${wrong?button(`只重练本组 ${wrong} 道错题`,`temp-retry-wrong:${id}`,"primary"):""}${cards}`);
+}
+async function aiDraftsView():Promise<void>{
+  const drafts=await listAiDrafts();shell("AI 待审核草稿",drafts.length?drafts.map(draft=>`<section class="card"><h2>${esc(draft.source_question_title)}</h2><p>${esc(draft.model)} · ${esc(formatUpdatedAt(draft.generated_at))}</p>${button("核对候选题",`ai-draft:${draft.id}`,"primary")}${button("丢弃草稿",`ai-discard:${draft.id}`,"destructive-action")}</section>`).join(""):emptyState("暂无待审核草稿","校验成功的单题 AI 结果会保存到这里。"));
 }
 async function tempAction(action:string):Promise<void>{
   const route=history.state as Route;if(route.view!=="temp-session")return;
@@ -1128,6 +1146,9 @@ let batchRunningJobId: string | null = null;
 let batchCurrentRequestId: string | null = null;
 let batchCancelRequested = false;
 let batchSavingReady = false;
+let batchStarting=false,batchCreating=false;
+let batchSelectedSources=new Set<string>();
+const billingNotice="每道原题调用一次 AI API，可能收费。取消只停止本地请求，不能保证服务商不计费；失败重试会再次发送请求。已校验的原题结果会保留。";
 
 function batchRouteId(): string | null {
   const route = history.state as Route;
@@ -1146,9 +1167,14 @@ async function batchReviewView(id?: string): Promise<void> {
     const review = await buildCurrentWrongReview();
     const sourceCount=review.items.length, batches=Math.ceil(sourceCount / SOURCES_PER_BATCH);
     const body = sourceCount
-      ? `<section class="card"><h2>批量回炉当前错题</h2><p>${sourceCount} 道原题，预计 ${sourceCount * GENERATED_PER_SOURCE} 道候选题，共 ${batches} 批。每批最多 ${SOURCES_PER_BATCH} 道原题；每次最多处理 ${MAX_SOURCES_PER_RUN} 道原题（${MAX_SOURCES_PER_RUN * GENERATED_PER_SOURCE} 道候选题），顺序请求。超过上限可分次继续。</p><p>每道原题调用一次 AI API，可能产生费用。只有完整校验通过的批次才能保存为临时题组。</p>${button("确认并创建批量任务","batch-create","primary")}</section>`
+      ? `<section class="card"><h2>选择本次回炉原题</h2><p>当前错题 ${sourceCount} 道。每批最多 ${SOURCES_PER_BATCH} 道原题，每次最多请求 ${MAX_SOURCES_PER_RUN} 道，只有完整校验的批次可保存。</p><label>选择前 N 道<input id="batch-source-count" type="number" min="1" max="${sourceCount}" value="${Math.min(12,sourceCount)}"></label>${button("选择前 N 道","batch-select-first")}${button("清空选择","batch-select-none")}<div class="batch-source-list">${review.items.map(item=>{const key=sourceKey(item.bank.id,item.question.id);return `<label><input type="checkbox" data-batch-source="${esc(key)}" ${batchSelectedSources.has(key)?"checked":""}>${esc(item.bank.title)} · ${esc(questionLead(item.question))}</label>`;}).join("")}</div><p id="batch-selection-summary"></p><p>${billingNotice} 已生成的原题再次选入新任务，仍会重新请求。</p>${button("确认创建并开始生成","batch-create","primary")}</section>`
       : emptyState("暂无当前错题","答错的题目会显示在这里。",{text:"返回当前错题",id:"wrong"});
     shell("批量 AI 回炉",settings+body);
+    const inputs=[...app.querySelectorAll<HTMLInputElement>("[data-batch-source]")];
+    const update=()=>{batchSelectedSources=new Set(inputs.filter(input=>input.checked).map(input=>input.dataset.batchSource!));const selected=batchSelectedSources.size,summary=app.querySelector("#batch-selection-summary");if(summary)summary.textContent=`已选 ${selected} 道原题 · 预计 ${selected*GENERATED_PER_SOURCE} 道候选 · ${Math.ceil(selected/SOURCES_PER_BATCH)} 批`;const create=app.querySelector<HTMLButtonElement>('[data-action="batch-create"]');if(create)create.disabled=!selected;};
+    inputs.forEach(input=>input.onchange=update);
+    const first=app.querySelector<HTMLButtonElement>('[data-action="batch-select-first"]');if(first)first.onclick=()=>{const n=Math.max(1,Math.min(sourceCount,Math.trunc(Number(app.querySelector<HTMLInputElement>("#batch-source-count")?.value)||1)));inputs.forEach((input,index)=>input.checked=index<n);update();};
+    const none=app.querySelector<HTMLButtonElement>('[data-action="batch-select-none"]');if(none)none.onclick=()=>{inputs.forEach(input=>input.checked=false);update();};update();
     return;
   }
   const job = await getBatchJob(id);
@@ -1168,7 +1194,7 @@ async function batchReviewView(id?: string): Promise<void> {
   const unsaved=ready.filter(b=>!b.savedGroupId).length;
   const controls=`${!running && modelMatch && (pending.length||failed.length) ? button("继续生成（本次最多 12 道原题）","batch-run","primary") : ""}${running ? `<p role="status">正在生成；已通过校验的批次会保留。</p>${button("取消本次生成","batch-cancel")}` : ""}${unsaved && !running ? button(`保存 ${unsaved} 个已校验批次并开始刷`,"batch-save-ready","primary") : ""}${saved.length ? button("查看临时题组","temp-groups") : ""}${!running ? button("删除批量任务","batch-delete","destructive-action") : ""}`;
   const warning=!status.configured ? `<p class="message error">请先填写 DeepSeek API Key。</p>` : !modelMatch ? `<p class="message error">此旧任务使用 ${esc(job.model)}；已校验批次仍可保存。未生成的错题请创建新的 DeepSeek 批量任务。</p>${button("新建批量任务","batch-new")}` : "";
-  shell("批量 AI 回炉",`<section class="card"><h2>任务进度</h2><p>${batches.length} 批 · 已校验 ${ready.length} · 已保存 ${saved.length} · 失败 ${failed.length} · 待生成 ${pending.length}</p><p>生成结果保存在本机。退出或重启后可继续，取消仅停止正在进行的请求。</p>${warning}${controls}</section>${settings}<div class="stack">${list}</div>`);
+  shell("批量 AI 回炉",`<section class="card"><h2>任务进度</h2><p>${batches.length} 批 · 已校验 ${ready.length} · 已保存 ${saved.length} · 失败 ${failed.length} · 待生成 ${pending.length}</p><p>生成结果保存在本机，退出或重启后可继续。${billingNotice}</p>${warning}${controls}</section>${settings}<div class="stack">${list}</div>`);
 }
 async function saveBatchConfig(): Promise<void> {
   const route=history.state as Route; if(route.view!=="batch-review")return;
@@ -1178,7 +1204,12 @@ async function saveBatchConfig(): Promise<void> {
   await batchReviewView(route.id);
 }
 async function createBatchReviewJob(): Promise<void> {
+  if(batchCreating)return;batchCreating=true;try{await createBatchReviewJobOnce();}finally{batchCreating=false;}
+}
+async function createBatchReviewJobOnce(): Promise<void> {
   const review=await buildCurrentWrongReview();
+  review.items=review.items.filter(item=>batchSelectedSources.has(sourceKey(item.bank.id,item.question.id)));
+  if(review.items.length!==batchSelectedSources.size)return notify("所选错题状态已变化，请重新核对选择");
   if(!review.items.length)return notify("当前没有错题");
   const status=await invoke<AiConfigStatus>("get_ai_config_status");
   if(!status.configured||!status.model)return notify("请先配置 AI API");
@@ -1189,6 +1220,9 @@ async function createBatchReviewJob(): Promise<void> {
   await runBatchReview(id);
 }
 async function runBatchReview(id:string, onlyIndex?:number): Promise<void> {
+  if(batchStarting||batchRunningJobId)return;batchStarting=true;try{await runBatchReviewOnce(id,onlyIndex);}finally{batchStarting=false;}
+}
+async function runBatchReviewOnce(id:string, onlyIndex?:number): Promise<void> {
   if(batchRunningJobId)return;
   const job=await getBatchJob(id); if(!job)return;
   const status=await invoke<AiConfigStatus>("get_ai_config_status");
@@ -1265,8 +1299,16 @@ async function saveReadyBatches(): Promise<void> {
 interface AiConfigStatus { configured: boolean; baseUrl: string | null; model: string | null }
 let aiPendingRequestId: string | null = null;
 let aiReviewError = "";
-let aiPreview: { questionId: string; bank: BankFile; model: string; generatedAt: string } | null = null;
+let aiPreview: { questionId: string; bank: BankFile; model: string; generatedAt: string; draftId:string } | null = null;
 let aiSavingGroup = false;
+let aiStarting=false;
+let pendingAiPersistence:{id:string;questionId:string;source:QuestionInput;bank:BankFile;model:string;generatedAt:string}|null=null;
+async function persistGeneratedDraft():Promise<void>{
+  const pending=pendingAiPersistence;if(!pending)return;
+  const saved=await saveAiDraft(pending.questionId,pending.source,pending.bank,pending.model,pending.generatedAt,pending.id);
+  aiPreview={questionId:pending.questionId,bank:pending.bank,model:pending.model,generatedAt:pending.generatedAt,draftId:saved.id};pendingAiPersistence=null;aiReviewError="";
+  const route=history.state as Route;if(route.view==="ai-review"&&route.questionId===pending.questionId)history.replaceState({...route,draftId:saved.id},"");
+}
 
 function aiRouteQuestionId(): string | null {
   const route = history.state as Route;
@@ -1275,14 +1317,16 @@ function aiRouteQuestionId(): string | null {
 
 async function aiReviewView(questionId: string): Promise<void> {
   const row = (await getQuestions([questionId]))[0];
+  const route=history.state as Route,draft=route.view==="ai-review"&&route.draftId?await getAiDraft(route.draftId):await latestAiDraft(questionId);
   if (aiRouteQuestionId() !== questionId) return;
-  if (!row) {
+  if (!row&&!draft) {
     shell("AI 回炉", emptyState("原题已不存在", "请返回当前错题重新选择。"));
     return;
   }
   const status = await invoke<AiConfigStatus>("get_ai_config_status");
   if (aiRouteQuestionId() !== questionId) return;
-  const original = parseQuestion(row);
+  const original = row?parseQuestion(row):JSON.parse(draft!.source_question_json) as QuestionInput;
+  if(pendingAiPersistence?.questionId===questionId)aiPreview={...pendingAiPersistence,draftId:""};else if(draft)aiPreview={questionId,bank:JSON.parse(draft.bank_json),model:draft.model,generatedAt:draft.generated_at,draftId:draft.id};else if(!aiPendingRequestId)aiPreview=null;
   const preview = aiPreview?.questionId === questionId ? aiPreview : null;
   const pending = !!aiPendingRequestId;
   const config = status.configured
@@ -1290,12 +1334,12 @@ async function aiReviewView(questionId: string): Promise<void> {
     : `<p class="ai-config-status">使用 DeepSeek V4.1 Flash。填写一次 API Key，重启后仍可使用。</p>`;
   const settings = `<details class="card ai-settings" ${status.configured ? "" : "open"}><summary>AI API 配置</summary>${config}<label>API Key<input id="ai-api-key" type="password" placeholder="${status.configured ? "填写新 Key 可替换" : "填写 DeepSeek API Key"}" autocomplete="off"></label>${button(status.configured ? "更换 API Key" : "保存 API Key", "ai-save-config", "primary")}</details>`;
   const result = preview
-    ? `<section class="ai-preview"><h2>候选变式题</h2><p>生成于 ${esc(preview.generatedAt)} · ${esc(preview.model)} · 源自原题 ${esc(original.id)}</p>${preview.bank.questions.map((q, index) => `<section class="card"><h3>第 ${index + 1} 题</h3>${reviewQuestionPreview(q)}</section>`).join("")}<p>请人工核对题目与答案。保存后可作为独立临时题组练习，不会加入正式题库。</p>${button("保存并开始刷", "ai-save-group", "primary")}</section>`
+    ? `<section class="ai-preview"><h2>候选变式题 · ${preview.draftId?"已保存待审核草稿":"尚未保存"}</h2><p>生成于 ${esc(preview.generatedAt)} · ${esc(preview.model)} · 源自原题 ${esc(original.id)}</p>${preview.bank.questions.map((q, index) => `<section class="card"><h3>第 ${index + 1} 题</h3>${reviewQuestionPreview(q)}</section>`).join("")}<p>请人工核对题目与答案。明确保存后才作为独立临时题组练习，不会加入正式题库。</p>${preview.draftId?`${button("保存并开始刷", "ai-save-group", "primary")}${button("丢弃此草稿",`ai-discard:${preview.draftId}`,"destructive-action")}${button("查看全部待审核草稿","ai-drafts")}`:""}</section>`
     : "";
-  const controls = pending
+  const controls = pendingAiPersistence?`${button("重试保存已校验草稿","ai-retry-persist","primary")}${button("丢弃未保存结果","ai-discard-unsaved","destructive-action")}`:pending
     ? `<p role="status">正在生成，请稍候…</p>${button("取消生成", "ai-cancel")}`
     : button(preview ? "重新生成 2 题" : "生成 2 道变式题", "ai-generate", "primary");
-  shell("AI 回炉", `<section class="card"><span class="type">${questionTypeLabel(original)}</span><h2 class="stem">${esc(questionLead(original))}</h2><p>本次将使用这道当前错题的题目、答案、错误信息和作答统计。</p></section>${settings}<section class="card">${controls}<div id="message" class="message ${aiReviewError ? "error" : ""}" role="alert">${esc(aiReviewError)}</div></section>${result}`);
+  shell("AI 回炉", `<section class="card"><span class="type">${questionTypeLabel(original)}</span><h2 class="stem">${esc(questionLead(original))}</h2><p>${row?"本次使用这道当前错题的题目、答案、错误信息和作答统计。":"原题已删除，待审核候选和来源快照仍保留，可保存临时练习。"}</p></section>${settings}<section class="card"><p>${billingNotice} 重新生成会再次收费，旧草稿仍保留在待审核列表。</p>${controls}<div id="message" class="message ${aiReviewError ? "error" : ""}" role="alert">${esc(aiReviewError)}</div></section>${result}`);
 }
 
 async function saveAiConfig(): Promise<void> {
@@ -1326,8 +1370,12 @@ async function clearAiConfig(): Promise<void> {
 }
 
 async function generateAiReview(): Promise<void> {
+  if(aiStarting||aiPendingRequestId)return;aiStarting=true;try{await generateAiReviewOnce();}finally{aiStarting=false;}
+}
+async function generateAiReviewOnce(): Promise<void> {
   const questionId = aiRouteQuestionId();
-  if (!questionId || aiPendingRequestId) return;
+  if (!questionId || aiPendingRequestId || pendingAiPersistence) return;
+  if(aiPreview?.questionId===questionId&&!confirm("重新生成将再次调用 AI API，可能收费。旧草稿会保留。确认重新生成？"))return;
   const row = (await getQuestions([questionId]))[0];
   if (!row) { aiReviewError = "原题已不存在"; return aiReviewView(questionId); }
   const review = await buildCurrentWrongReview();
@@ -1349,20 +1397,17 @@ async function generateAiReview(): Promise<void> {
   try {
     const input = {review: {...review, items: [original]}, sourceContext: [], generationOptions: {count: 2}};
     const response = await invoke<string>("generate_ai_review", {requestId, input});
-    if (aiPendingRequestId !== requestId || aiRouteQuestionId() !== questionId) return;
-    const latest = await buildCurrentWrongReview();
-    if (!latest.items.some(item => item.bank.id === row.bank_id && item.question.id === row.external_id)) {
-      throw new Error("生成期间原题状态已变化，请重新选择当前错题");
-    }
+    if (aiPendingRequestId !== requestId) return;
     const bank = parseAiReviewBank(response, original, new Set());
     const existing = await (await db()).select<{external_id: string}[]>(
       "SELECT external_id FROM questions WHERE external_id IN ($1,$2)",
       bank.questions.map(q => q.id)
     );
     if (existing.length) throw new Error(`题目 ID 已存在：${existing.map(q => q.external_id).join("、")}`);
-    aiPreview = {questionId, bank, model: status.model ?? "", generatedAt: new Date().toISOString()};
+    pendingAiPersistence={id:crypto.randomUUID(),questionId,source:original.question,bank,model:status.model??"",generatedAt:new Date().toISOString()};
+    await persistGeneratedDraft();
   } catch (error) {
-    if (aiPendingRequestId === requestId) aiReviewError = error instanceof Error ? error.message : String(error);
+    if (aiPendingRequestId === requestId) aiReviewError = pendingAiPersistence?"候选已校验，但本机草稿保存失败。请保持此页面并重试保存，重试保存不会请求 AI；关闭应用前未保存的结果可能丢失。":error instanceof Error ? error.message : String(error);
   } finally {
     if (aiPendingRequestId === requestId) {
       aiPendingRequestId = null;
@@ -1376,7 +1421,7 @@ async function cancelAiReview(): Promise<void> {
   const questionId = aiRouteQuestionId();
   if (!requestId || !questionId) return;
   aiPendingRequestId = null;
-  aiReviewError = "已取消生成";
+  aiReviewError = "已停止本地请求，不能保证服务商不计费；此前已校验草稿仍保留。";
   await invoke("cancel_ai_review", {requestId});
   await aiReviewView(questionId);
 }
@@ -1409,6 +1454,13 @@ app.addEventListener("click",async e=>{const target=(e.target as HTMLElement).cl
     if(action==="import")return navigate({view:"import"});
     if(action==="backup")return navigate({view:"backup"});
     if(action==="sessions")return navigate({view:"sessions"});
+    if(action==="ai-drafts")return navigate({view:"ai-drafts"});
+    if(action==="ai-retry-persist")return await withStudyAction(async()=>{await persistGeneratedDraft();const id=aiRouteQuestionId();if(id)await aiReviewView(id);});
+    if(action==="ai-discard-unsaved"){if(!confirm("丢弃未保存的已校验结果？已发生的 API 费用不会退还。"))return;pendingAiPersistence=null;aiPreview=null;aiReviewError="";const id=aiRouteQuestionId();if(id)return aiReviewView(id);return;}
+    if(action.startsWith("ai-draft:")){const draft=await getAiDraft(action.slice(9));if(draft)return navigate({view:"ai-review",questionId:draft.source_question_id,draftId:draft.id});return;}
+    if(action.startsWith("ai-discard:")){if(!confirm("丢弃此待审核草稿？已发生的 API 费用不会退还。"))return;await deleteAiDraft(action.slice(11));aiPreview=null;return navigate({view:"ai-drafts"},true);}
+    if(action.startsWith("temp-review:"))return navigate({view:"temp-review",id:action.slice(12)});
+    if(action.startsWith("temp-retry-wrong:")){let id:string|null=null;await withStudyAction(async()=>{id=await retryTempWrong(action.slice(17));});if(id)return navigate({view:"temp-session",id});return notify("本组没有错题");}
     if(action.startsWith("repeat-session:"))return await repeatRound(action.slice("repeat-session:".length));
     if(action.startsWith("confirm-import:"))return await withStudyAction(()=>confirmImport(Number(action.slice("confirm-import:".length))));
     if(action.startsWith("cancel-import:")){importQueue=importQueue.filter(entry=>entry.id!==Number(action.slice("cancel-import:".length)));return importView();}
@@ -1430,13 +1482,13 @@ app.addEventListener("click",async e=>{const target=(e.target as HTMLElement).cl
     if(action.startsWith("temp-delete:")){const id=action.slice(12);if(!confirm("删除这个临时回炉题组及其练习进度？"))return;await deleteTempGroup(id);notify("已删除临时题组","ok");return navigate({view:"temp-groups"},true);}
     if(action.startsWith("filter-type:")){const type=action.slice("filter-type:".length) as BrushType;if(!brushTypes.includes(type))return;enabledBrushTypes.has(type)?enabledBrushTypes.delete(type):enabledBrushTypes.add(type);saveBrushTypes();return home();}
     if(action==="export-error-review")return exportWrongReview();
-    if(action==="batch-new")return navigate({view:"batch-review"});
+    if(action==="batch-new"){batchSelectedSources.clear();return navigate({view:"batch-review"});}
     if(action.startsWith("batch-open:"))return navigate({view:"batch-review",id:action.slice(11)});
     if(action==="batch-save-config")return saveBatchConfig();
     if(action==="batch-clear-config"){await invoke("clear_ai_config");const route=history.state as Route;if(route.view==="batch-review")return batchReviewView(route.id);return;}
     if(action==="batch-create")return createBatchReviewJob();
-    if(action==="batch-run"){const id=batchRouteId();if(id)return runBatchReview(id);return;}
-    if(action.startsWith("batch-retry:")){const id=batchRouteId();if(id)return runBatchReview(id,Number(action.slice(12)));return;}
+    if(action==="batch-run"){const id=batchRouteId();if(id&&confirm("继续将再次请求未成功的原题，可能收费。已校验的原题结果保留，不重新请求。确认继续？"))return runBatchReview(id);return;}
+    if(action.startsWith("batch-retry:")){const id=batchRouteId();if(id&&confirm("重试将再次发送尚未成功的原题请求，可能再次收费；已校验原题不会重新请求。确认重试？"))return runBatchReview(id,Number(action.slice(12)));return;}
     if(action==="batch-cancel")return cancelBatchReview();
     if(action==="batch-save-ready")return saveReadyBatches();
     if(action==="batch-delete"){const id=batchRouteId();if(!id)return;if(!confirm("删除这项批量回炉任务及未保存的候选题？已保存的临时题组会保留。"))return;await deleteBatchJob(id);return navigate({view:"list",kind:"wrong"},true);}
@@ -1512,6 +1564,7 @@ app.addEventListener("click",async e=>{const target=(e.target as HTMLElement).cl
 
 window.addEventListener("popstate", async e => {
   try { await studyDone;await flushDrafts(); } catch(error){if(renderedRoute)history.replaceState(renderedRoute,"");reportSaveError(error);return;}
+  if(pendingAiPersistence){if(renderedRoute)history.replaceState(renderedRoute,"");notify("候选尚未保存，请重试保存或明确丢弃后离开");return;}
   if(restoreSyncPending){history.replaceState({view:"backup"} satisfies Route,"");await backupView();return;}
   if(forcedBackTarget){const target=forcedBackTarget;forcedBackTarget=null;history.replaceState(target,"");void renderRoute(target);return;}
   const route = isRoute(e.state) ? e.state : ({view:"home"} satisfies Route);

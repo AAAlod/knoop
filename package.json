@@ -15,7 +15,8 @@
     "test:review-a": "node scripts/test-review-a.mjs",
     "test:review-b": "node scripts/test-review-b.mjs",
     "test:review-c": "node scripts/test-review-c.mjs",
-    "test:review-d": "node scripts/test-review-d.mjs"
+    "test:review-d": "node scripts/test-review-d.mjs",
+    "test:review-e": "node scripts/test-review-e.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.8.0",

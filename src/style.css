@@ -260,6 +260,7 @@ main:has(.form-bottom-actions){padding-bottom:calc(132px + env(safe-area-inset-b
 /* Review A: local home hierarchy and unobtrusive interaction help. */
 .home-summary{flex-wrap:wrap;gap:6px 16px;margin-bottom:6px}
 .home-count-help,.home-session-summary,.option-help,.list-help{color:#666;font-size:13px;line-height:1.5;overflow-wrap:anywhere}
+.batch-source-list{display:grid;gap:8px;margin-top:16px}.batch-source-list label{display:flex;gap:10px;align-items:flex-start;overflow-wrap:anywhere;margin-top:0}.batch-source-list input{width:20px;height:20px;flex:0 0 20px;margin:2px 0}
 .home-count-help{margin:0 2px 16px;font-size:12px}
 .home-study{margin-top:16px;margin-bottom:18px}
 .home-resume{min-width:0}.home-resume button{width:100%}

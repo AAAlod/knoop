@@ -243,6 +243,41 @@ pub fn cancel_ai_review(state: State<'_, AiState>, request_id: String) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+
+    #[test]
+    fn service_errors_never_echo_key_or_response_body() {
+        tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap().block_on(async {
+        let secret = "synthetic-private-key";
+        for (status, body, expected) in [(401, secret, "HTTP 401"), (200, secret, "不是有效 JSON")] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0u8; 4096];
+                loop {
+                    let n = stream.read(&mut buffer).unwrap();
+                    if n == 0 { break; }
+                    request.extend_from_slice(&buffer[..n]);
+                    if let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&request[..end]).to_lowercase();
+                        let length: usize = headers.lines().find_map(|s| s.strip_prefix("content-length:")).unwrap_or("0").trim().parse().unwrap();
+                        if request.len() >= end + 4 + length { break; }
+                    }
+                }
+                write!(stream, "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            });
+            let mut config = config_for_key(secret).unwrap();
+            config.endpoint = reqwest::Url::parse(&format!("http://{address}/mock")).unwrap();
+            let error = request_review(config, json!({"synthetic":true})).await.unwrap_err();
+            assert!(error.contains(expected));
+            assert!(!error.contains(secret));
+            server.join().unwrap();
+        }
+        });
+    }
 
     #[test]
     fn deepseek_defaults_and_key_persist_across_reload() {

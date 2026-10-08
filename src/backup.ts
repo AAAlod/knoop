@@ -32,7 +32,7 @@ export async function buildBackup(storage:PreferenceStorage=localStorage):Promis
   const sequences={attempts:rows.find(row=>row.name==="attempts")?.seq??0,question_answer_revisions:rows.find(row=>row.name==="question_answer_revisions")?.seq??0};
   await atomicWrite([...names.map(name=>({sql:query(name),expectedRows:tables[name]})),{sql:sequenceQuery,expectedRows:rows}]);
   if(canonical(readPreferences(storage))!==canonical(preferences))throw new Error("设置已变化，请重新导出备份");
-  const payload={format:"knoop-backup" as const,version:"1.0" as const,appVersion,exportedAt:new Date().toISOString(),tables,counts,sequences,preferences};
+  const payload={format:"knoop-backup" as const,version:"1.1" as const,appVersion,exportedAt:new Date().toISOString(),tables,counts,sequences,preferences};
   return validateBackup({...payload,integrity:{algorithm:"SHA-256",digest:await backupDigest(payload)}});
 }
 export interface PreparedRestore {target:BackupFile;before:BackupFile;safetyFile:string}

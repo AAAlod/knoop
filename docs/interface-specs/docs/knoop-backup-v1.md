@@ -1,5 +1,7 @@
 # Knoop Backup 1.0
 
+新版本应用读取 1.0 并显式迁移，导出使用 [Backup 1.1](knoop-backup-v1.1.md)，以覆盖新增待审核草稿。以下保留 1.0 的历史协议定义。
+
 `knoop-backup` 是独立的完整学习状态备份协议，不替代或修改 `knoop-bank` / `knoop-bundle`。公开结构见 `../schemas/knoop-backup-v1.schema.json`，合成空库例子见 `../../../examples/sample-backup.json`。
 
 ## 覆盖范围

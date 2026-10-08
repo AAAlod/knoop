@@ -78,7 +78,7 @@ fn safety_name(name: &str) -> bool {
 }
 fn save_safety(directory: &Path, data: &str) -> Result<String, String> {
     let value: Value = serde_json::from_str(data).map_err(|_| "安全副本不是有效 JSON")?;
-    if value["format"] != "knoop-backup" || value["version"] != "1.0" { return Err("安全副本格式无效".into()); }
+    if value["format"] != "knoop-backup" || (value["version"] != "1.0" && value["version"] != "1.1") { return Err("安全副本格式无效".into()); }
     std::fs::create_dir_all(directory).map_err(|e| e.to_string())?;
     let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| e.to_string())?.as_nanos();
     let name = format!("before-restore-{stamp}.json");

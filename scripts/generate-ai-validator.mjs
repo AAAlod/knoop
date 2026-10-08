@@ -3,7 +3,7 @@ import { resolve, dirname } from "node:path";
 import Ajv2020 from "ajv/dist/2020.js";
 import standaloneCode from "ajv/dist/standalone/index.js";
 
-for(const name of ["knoop-bank-v1.1","knoop-bank-v1","knoop-backup-v1"]){
+for(const name of ["knoop-bank-v1.1","knoop-bank-v1","knoop-backup-v1","knoop-backup-v1.1"]){
 const schemaPath = resolve(`docs/interface-specs/schemas/${name}.schema.json`);
 const outputPath = resolve(`src/generated/${name}-validator.js`);
 const schema = JSON.parse(readFileSync(schemaPath, "utf8"));

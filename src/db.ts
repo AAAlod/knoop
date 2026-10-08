@@ -33,6 +33,7 @@ async function initialize(): Promise<Database> {
     `CREATE TABLE IF NOT EXISTS ai_review_batch_jobs (id TEXT PRIMARY KEY, model TEXT NOT NULL, review_json TEXT NOT NULL, batches_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS backup_preference_journal (id INTEGER PRIMARY KEY CHECK(id=1), previous_json TEXT NOT NULL, target_json TEXT NOT NULL, committed INTEGER NOT NULL DEFAULT 0)`,
     `CREATE TABLE IF NOT EXISTS ai_review_groups (id TEXT PRIMARY KEY, source_question_id TEXT NOT NULL, source_question_title TEXT NOT NULL, model TEXT NOT NULL, generated_at TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, bank_json TEXT NOT NULL, question_meta_json TEXT NOT NULL, current_index INTEGER NOT NULL DEFAULT 0, state_json TEXT NOT NULL DEFAULT '{}', results_json TEXT NOT NULL DEFAULT '[]', completed_at TEXT)`,
+    `CREATE TABLE IF NOT EXISTS ai_review_drafts (id TEXT PRIMARY KEY, source_question_id TEXT NOT NULL, source_question_title TEXT NOT NULL, source_question_json TEXT NOT NULL, bank_json TEXT NOT NULL, model TEXT NOT NULL, generated_at TEXT NOT NULL, created_at TEXT NOT NULL)`,
     "CREATE INDEX IF NOT EXISTS idx_questions_node ON questions(node_id)",
     "CREATE INDEX IF NOT EXISTS idx_attempts_question ON attempts(question_id, id DESC)",
     "CREATE INDEX IF NOT EXISTS idx_answer_revisions_question ON question_answer_revisions(question_id,last_attempt_id)"

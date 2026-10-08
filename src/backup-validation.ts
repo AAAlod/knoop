@@ -1,5 +1,7 @@
-import validateSchema from "./generated/knoop-backup-v1-validator.js";
+import validateV1 from "./generated/knoop-backup-v1-validator.js";
+import validateV11 from "./generated/knoop-backup-v1.1-validator.js";
 import { validateBank } from "./db";
+import {parseAiReviewBank,type WrongReviewItem} from "./ai-review";
 import { backupDigest, canonical, backupTables, preferenceKeys, type BackupFile, type BackupRow, type Preferences } from "./backup-format";
 import type { BankFile, QuestionInput } from "./types";
 
@@ -40,12 +42,14 @@ export function validatePreferences(preferences:Preferences):void{
   }
 }
 export async function validateBackup(raw:unknown):Promise<BackupFile>{
+  const legacy=!!raw&&typeof raw==="object"&&(raw as {version?:unknown}).version==="1.0",validateSchema=legacy?validateV1:validateV11;
   if(!validateSchema(raw)){
     const error=validateSchema.errors?.[0];throw new Error(`备份结构无效：${error?.instancePath||"根节点"} ${error?.message||"格式或版本不支持"}`);
   }
-  const file=raw as BackupFile;
+  let file=raw as BackupFile;
   const {integrity,...payload}=file;
   requireValue(await backupDigest(payload)===integrity.digest,"integrity","SHA-256 不匹配，文件可能不完整或已修改");
+  if(legacy){const upgraded={...payload,version:"1.1" as const,tables:{...payload.tables,ai_review_drafts:[]},counts:{...payload.counts,ai_review_drafts:0}};file={...upgraded,integrity:{algorithm:"SHA-256",digest:await backupDigest(upgraded)}};}
   requireValue(Number.isFinite(Date.parse(file.exportedAt)),"exportedAt","时间无效");
   const maps:Record<string,Map<string|number,BackupRow>>={};
   for(const name of Object.keys(backupTables) as (keyof typeof backupTables)[]){
@@ -98,6 +102,11 @@ export async function validateBackup(raw:unknown):Promise<BackupFile>{
     const resultIds=new Set();requireValue(Array.isArray(results),"group.results","必须是数组");
     for(const result of results){requireValue(result&&bank.questions.some(q=>q.id===result.questionId)&&!resultIds.has(result.questionId)&&typeof result.correct==="boolean"&&["auto","manual"].includes(result.grading)&&(typeof result.answer==="string"||Array.isArray(result.answer)&&result.answer.every((x:unknown)=>typeof x==="string")),"group.results","重复或非法作答");resultIds.add(result.questionId);}
     requireValue(Number(group.current_index)<=bank.questions.length,"group.current_index","超出范围");state(parse(group.state_json,"group.state"),"group.state");
+  }
+  for(const draft of file.tables.ai_review_drafts){
+    const source=parse(draft.source_question_json,"draft.source_question_json");question(source,"draft.source_question_json");
+    if(maps.questions.has(draft.source_question_id!))requireValue(source.id===maps.questions.get(draft.source_question_id!)!.external_id,"draft.source_question_json","原题身份不一致");
+    parseAiReviewBank(String(draft.bank_json),{question:source} as WrongReviewItem,new Set());
   }
   for(const job of file.tables.ai_review_batch_jobs){
     const review=parse(job.review_json,"batch.review"),batches=parse(job.batches_json,"batch.batches");

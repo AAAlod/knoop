@@ -21,7 +21,7 @@ export async function reviewHarness({baselineRef,suffix='window.__review={naviga
     b.onLoad({filter:/.*/,namespace:'mock'},a=>({loader:'js',contents:a.path==='sql'?`export default {load:async()=>${browser?'({execute:(s,p)=>window.__sql("execute",s,p),select:(s,p)=>window.__sql("select",s,p)})':'globalThis.__reviewAdapter'}};`:`export const invoke=(c,a)=>${browser?'window.__native(c,a)':'globalThis.__reviewNative(c,a)'};`}));
     b.onLoad({filter:/[\\/]src[\\/](main|db|temp-review|batch-review)\.ts$/},async a=>{const path='src/'+a.path.split(/[\\/]/).at(-1);return {loader:'ts',contents:await source(path)+(path==='src/main.ts'?'\n'+suffix:'')};});
   }});
-  const built=await build({stdin:{contents:'export * as d from "./src/db";export * as t from "./src/temp-review";export * as b from "./src/batch-review";',resolveDir:process.cwd(),loader:'ts'},bundle:true,platform:'node',format:'cjs',write:false,plugins:[plugin(false)],logLevel:'silent'});
+  const built=await build({stdin:{contents:'export * as d from "./src/db";export * as t from "./src/temp-review";export * as b from "./src/batch-review";export * as a from "./src/ai-drafts";',resolveDir:process.cwd(),loader:'ts'},bundle:true,platform:'node',format:'cjs',write:false,plugins:[plugin(false)],logLevel:'silent'});
   const mod={exports:{}};new Function('module','exports',built.outputFiles[0].text)(mod,mod.exports);await mod.exports.d.db();
   const results=[];await mkdir(out,{recursive:true});
   const check=async(id,fn)=>{try{const evidence=await fn();results.push({id,status:'PASS',...evidence});console.log('PASS '+id);}catch(e){results.push({id,status:'FAIL',reason:e.message});console.log('FAIL '+id+': '+e.message.split('\n')[0]);}};
