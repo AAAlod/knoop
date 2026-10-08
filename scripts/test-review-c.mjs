@@ -19,7 +19,7 @@ globalThis.__knoopC=adapter;
 const plugin=browser=>({name:'isolated-sqlite',setup(b){
   b.onResolve({filter:/^@tauri-apps\/plugin-sql$/},()=>({path:'sql',namespace:'test'}));
   b.onResolve({filter:/^@tauri-apps\/api\/core$/},()=>({path:'core',namespace:'test'}));
-  b.onLoad({filter:/.*/,namespace:'test'},args=>({loader:'js',contents:args.path==='sql'?`export default {load:async()=>${browser?'({execute:(s,p)=>window.__sql("execute",s,p),select:(s,p)=>window.__sql("select",s,p)})':'globalThis.__knoopC'}};`:`export async function invoke(command,args){if(command==="atomic_write")return ${browser?'window.__atomic(args.steps)':'globalThis.__knoopC.atomic(args.steps)'};if(command==="save_restore_safety_copy")return ${browser?'window.__safety(args.data)':'globalThis.__safety(args.data)'};throw Error("Native API forbidden");}`}));
+  b.onLoad({filter:/.*/,namespace:'test'},args=>({loader:'js',contents:args.path==='sql'?`export default {load:async()=>${browser?'({execute:(s,p)=>window.__sql("execute",s,p),select:(s,p)=>window.__sql("select",s,p)})':'globalThis.__knoopC'}};`:`export async function invoke(command,args){if(command==="atomic_write")return ${browser?'window.__atomic(args.steps)':'globalThis.__knoopC.atomic(args.steps)'};if(command==="save_restore_safety_copy")return ${browser?'window.__safety(args.data)':'globalThis.__safety(args.data)'};${browser?'if(command==="list_restore_safety_copies"||command==="read_restore_safety_copy")return window.__copies(command,args);':''}throw Error("Native API forbidden");}`}));
   if(browser)b.onLoad({filter:/[\\/]src[\\/]main\.ts$/},async()=>({loader:'ts',contents:(baseline?execFileSync('git',['-c',`safe.directory=${process.cwd().replaceAll('\\','/')}`,'show','df658ad:src/main.ts'],{encoding:'utf8'}):await readFile('src/main.ts','utf8'))+'\nwindow.__ui={navigate};'}));
 }});
 let hasBackup=true;try{await readFile('src/backup.ts');}catch{hasBackup=false;}
@@ -41,6 +41,10 @@ await check('F09 normal and AI structure rules agree, field errors are actionabl
   const cases=[['extra field',bank=>bank.questions[0].unknown=1],['options wrong type',bank=>bank.questions[0].options='A'],['empty option',bank=>bank.questions[0].options[0].text=''],['duplicate ID',bank=>bank.questions[1].id=bank.questions[0].id],['orphan node',bank=>bank.questions[0].nodeId='absent'],['node cycle',bank=>bank.nodes[0].parentId='review'],['invalid answer',bank=>bank.questions[0].answer='Z']];
   for(const [name,mutate] of cases){const bank=structuredClone(fixture);mutate(bank);assert.throws(()=>d.validateBank(bank),undefined,`normal accepted ${name}`);assert.throws(()=>ai.parseAiReviewBank(JSON.stringify(bank),{question:{id:'original',stem:'原题'}},new Set()),undefined,`AI accepted ${name}`);}
   for(const version of ['1.0','1.1'])assert.equal(d.validateBank({...fixture,version}).version,version);
+});
+await check('F09 semantic errors identify duplicate/question/node/answer fields',async()=>{
+  const cases=[[/questions\/1\/id/,bank=>bank.questions[1].id=bank.questions[0].id],[/questions\/0\/nodeId/,bank=>bank.questions[0].nodeId='missing'],[/nodes\/0\/parentId/,bank=>bank.nodes[0].parentId='review'],[/questions\/0\/answer/,bank=>bank.questions[0].answer='Z']];
+  for(const [location,mutate] of cases){const bank=structuredClone(fixture);mutate(bank);assert.throws(()=>d.validateBank(bank),location);assert.throws(()=>ai.parseAiReviewBank(JSON.stringify(bank),{question:{id:'original',stem:'原题'}},new Set()),location);}
 });
 const copies=new Map();globalThis.__safety=async data=>{const name=`before-restore-${copies.size+1}.json`;copies.set(name,data);return name;};
 class MemoryStorage {
@@ -87,6 +91,12 @@ if(hasBackup){
     await reset();const old=Object.fromEntries(f.preferenceKeys.map(k=>[k,null])),target={...old,[f.preferenceKeys[1]]:'["blank"]'},storage=new MemoryStorage();
     for(const committed of [0,1]){storage.setItem(f.preferenceKeys[1],'["single_choice"]');await adapter.execute('INSERT INTO backup_preference_journal VALUES(1,$1,$2,$3)',[JSON.stringify(old),JSON.stringify(target),committed]);assert.equal(await backup.recoverPreferenceRestore(storage),!!committed);assert.equal(storage.getItem(f.preferenceKeys[1]),committed?'["blank"]':null);assert.equal((await adapter.select('SELECT * FROM backup_preference_journal')).length,0);}
   });
+  await check('F08 committed restore survives final journal cleanup failure and retry',async()=>{
+    const {storage}=await seed(),target=await backup.buildBackup(storage);await reset();const local=new MemoryStorage(),prepared=await backup.prepareRestore(target,local);
+    writeCount=0;faultAt=Object.values(target.counts).reduce((a,n)=>a+n,0)+18;await assert.rejects(()=>backup.restorePrepared(prepared,local),/Injected/);faultAt=0;
+    assert.equal((await adapter.select('SELECT committed FROM backup_preference_journal'))[0].committed,1);assert.equal(snapshot().questions.length,target.counts.questions);
+    assert.equal(await backup.recoverPreferenceRestore(local),true);const result=await backup.buildBackup(local);assert.deepEqual(result.tables,target.tables);assert.deepEqual(result.preferences,target.preferences);
+  });
   await check('F08 changed local data after safety copy rejects stale restore',async()=>{
     const {storage,rows}=await seed(),target=await backup.buildBackup(storage),prepared=await backup.prepareRestore(target,storage);await d.saveNote(rows[0].id,'更新后的本地笔记');const previous=snapshot();await assert.rejects(()=>backup.restorePrepared(prepared,storage),/changed/);assert.deepEqual(snapshot(),previous);
   });
@@ -101,6 +111,7 @@ if(process.argv.includes('--ui')){
   const server=createServer((req,res)=>{res.setHeader('Content-Type','text/html; charset=utf-8');res.end(`<div id="app"></div><script>${frontend.outputFiles[0].text.replaceAll('</script>','<\\/script>')}</script>`);});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const browser=await chromium.launch({headless:true,...(process.env.CHROME_PATH?{executablePath:process.env.CHROME_PATH}:{})});const context=await browser.newContext();await context.addInitScript(()=>history.replaceState({view:'home'},''));
   await context.exposeBinding('__sql',(_,op,s,p)=>adapter[op](s,p));await context.exposeBinding('__atomic',(_,steps)=>adapter.atomic(steps));await context.exposeBinding('__safety',(_,data)=>globalThis.__safety(data));
+  await context.exposeBinding('__copies',(_,command,args)=>command==='list_restore_safety_copies'?[...copies].map(([name,data])=>({name,bytes:Buffer.byteLength(data)})).reverse():copies.get(args.name));
   const page=await context.newPage();page.setDefaultTimeout(8000);const errors=[];page.on('pageerror',e=>errors.push(e.message));
   try{
     await check('U03 selecting/cancelling a merge never writes before explicit confirmation',async()=>{
@@ -110,6 +121,42 @@ if(process.argv.includes('--ui')){
       await page.locator('[data-action^="confirm-import:"]').waitFor();assert.match(await page.locator('#import-previews').innerText(),/新增 1.*覆盖 1/);await page.locator('[data-action^="cancel-import:"]').click();assert.deepEqual(snapshot(),before);
       await page.locator('#file').setInputFiles({name:'merge.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(merge))});await page.locator('[data-action^="confirm-import:"]').click();await page.getByText(/已成功导入/).waitFor();assert.equal((await d.getQuestions()).length,3);assert.equal(JSON.parse((await d.getQuestions())[0].content_json).stem,'覆盖本地编辑');
     });
+    if(!baseline){
+      const home=async()=>{await page.evaluate(()=>localStorage.clear());await page.goto(`http://127.0.0.1:${server.address().port}/`);await page.locator('.home-main').waitFor();};
+      const chooseBackup=async target=>{await page.evaluate(()=>window.__ui.navigate({view:'backup'}));await page.locator('#backup-file').setInputFiles({name:'backup.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(target))});await page.locator('[data-action="backup-prepare"]').waitFor();};
+      await check('U03 bundle child errors coexist with independently confirmed successes',async()=>{
+        await reset();await home();await page.evaluate(()=>window.__ui.navigate({view:'import'}));const invalid=structuredClone(fixture);invalid.import.bankId='invalid';invalid.questions[0].options='bad';
+        await page.locator('#file').setInputFiles({name:'partial-bundle.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify({format:'knoop-bundle',version:'1.0',exportedAt:new Date().toISOString(),banks:[fixture,invalid,null]}))});
+        await page.locator('[data-action^="confirm-import:"]').waitFor();assert.equal(await page.locator('[data-action^="confirm-import:"]').count(),1);assert.equal((await d.getBanks()).length,0);assert.match(await page.locator('#import-previews').innerText(),/第 2 个题库[\s\S]*options/);
+        await page.locator('[data-action^="confirm-import:"]').click();await page.getByText(/已成功导入/).waitFor();assert.equal((await d.getBanks()).length,1);assert.equal(await page.locator('#import-previews .message.error').count(),2);
+      });
+      await check('F08 backup UI export, two-stage confirmation, cancellation and safety archive reload',async()=>{
+        const {storage}=await seed(),target=await backup.buildBackup(storage);await reset();await home();const before=snapshot();await chooseBackup(target);assert.deepEqual(snapshot(),before);
+        await page.locator('[data-action="backup-cancel"]').click();assert.deepEqual(snapshot(),before);await chooseBackup(target);const priorCopies=copies.size;
+        await page.locator('[data-action="backup-prepare"]').click();await page.locator('[data-action="backup-confirm"]').waitFor();assert.equal(copies.size,priorCopies+1);assert.deepEqual(snapshot(),before);
+        page.once('dialog',dialog=>dialog.dismiss());await page.locator('[data-action="backup-confirm"]').click();assert.deepEqual(snapshot(),before);
+        page.once('dialog',dialog=>dialog.accept());await page.locator('[data-action="backup-confirm"]').click();await page.locator('.home-main').waitFor();assert.equal(snapshot().attempts.length,target.counts.attempts);
+        const preferences=await page.evaluate(keys=>Object.fromEntries(keys.map(k=>[k,localStorage.getItem(k)])),f.preferenceKeys);assert.deepEqual(preferences,target.preferences);
+        await page.evaluate(()=>window.__ui.navigate({view:'backup'}));const downloadPromise=page.waitForEvent('download');await page.locator('[data-action="backup-export"]').click();const download=await downloadPromise;const exported=await v.validateBackup(JSON.parse(await readFile(await download.path(),'utf8')));assert.deepEqual(exported.tables,target.tables);
+        await page.locator('details summary').click();await page.locator('[data-action^="backup-load:"]').first().click();await page.locator('[data-action="backup-prepare"]').waitFor();assert.match(await page.locator('#app').innerText(),/题库 0 · 内容 0/);assert.equal(snapshot().attempts.length,target.counts.attempts);
+      });
+      await check('F08 invalid selected backup and restore transaction failure preserve current data',async()=>{
+        const {storage}=await seed(),target=await backup.buildBackup(storage);await reset();await home();await page.evaluate(()=>window.__ui.navigate({view:'backup'}));const before=snapshot(),bad=structuredClone(target);bad.tables.banks[0].title='tampered';
+        await page.locator('#backup-file').setInputFiles({name:'bad.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(bad))});await page.getByText(/SHA-256/).waitFor();assert.equal(await page.locator('[data-action="backup-prepare"]').count(),0);assert.deepEqual(snapshot(),before);
+        await chooseBackup(target);await page.locator('[data-action="backup-prepare"]').click();await page.locator('[data-action="backup-confirm"]').waitFor();writeCount=0;faultAt=5;page.once('dialog',dialog=>dialog.accept());await page.locator('[data-action="backup-confirm"]').click();await page.locator('#backup-message').filter({hasText:'Injected'}).waitFor();faultAt=0;assert.deepEqual(snapshot(),before);assert.equal(await page.locator('[data-action="backup-confirm"]').count(),0);
+      });
+      await check('F08 committed cleanup failure blocks navigation until preferences recover',async()=>{
+        const {storage}=await seed(),target=await backup.buildBackup(storage);await reset();await home();await chooseBackup(target);await page.locator('[data-action="backup-prepare"]').click();await page.locator('[data-action="backup-confirm"]').waitFor();
+        writeCount=0;faultAt=Object.values(target.counts).reduce((a,n)=>a+n,0)+18;page.once('dialog',dialog=>dialog.accept());await page.locator('[data-action="backup-confirm"]').click();await page.locator('[data-action="backup-sync"]').waitFor();faultAt=0;assert.equal(await page.locator('[data-action="home"]').count(),0);assert.equal(snapshot().questions.length,target.counts.questions);
+        await page.evaluate(()=>{history.pushState({view:'import'},'');dispatchEvent(new PopStateEvent('popstate',{state:{view:'import'}}));});await page.locator('[data-action="backup-sync"]').waitFor();assert.equal(await page.locator('#file').count(),0);
+        await page.locator('[data-action="backup-sync"]').click();await page.locator('.home-main').waitFor();assert.equal(snapshot().backup_preference_journal.length,0);assert.deepEqual(await page.evaluate(keys=>Object.fromEntries(keys.map(k=>[k,localStorage.getItem(k)])),f.preferenceKeys),target.preferences);
+      });
+      await check('F08 startup recovers interrupted preference journal before showing learning views',async()=>{
+        await reset();await home();const preferences=Object.fromEntries(f.preferenceKeys.map(k=>[k,k===f.preferenceKeys[1]?'["blank"]':null]));await adapter.execute('INSERT INTO backup_preference_journal VALUES(1,$1,$2,1)',[JSON.stringify(Object.fromEntries(f.preferenceKeys.map(k=>[k,null]))),JSON.stringify(preferences)]);
+        await page.reload();await page.locator('.home-main').waitFor();assert.equal(snapshot().backup_preference_journal.length,0);assert.equal(await page.evaluate(()=>localStorage.getItem('knoop.enabledBrushTypes.v1')),'["blank"]');
+      });
+      await check('C browser has no uncaught runtime errors',async()=>assert.deepEqual(errors,[]));
+    }
   }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}
 }
 await mkdir('artifacts/review-c',{recursive:true});await writeFile(`artifacts/review-c/${baseline?'baseline':'regression'}${process.argv.includes('--ui')?'-ui':''}.json`,JSON.stringify(results,null,2));

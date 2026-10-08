@@ -7,8 +7,12 @@ import { candidateFingerprint, checkedCandidateIds, createBatchJob, deleteBatchJ
 import { gradeQuestion } from "./grading";
 import { createTempGroup, deleteTempGroup, emptyTempState, getTempGroup, listTempGroups, restartTempGroup, saveTempProgress, tempBank, tempResults, tempState } from "./temp-review";
 import { enqueueDraft, flushDrafts } from "./state-writes";
+import { buildBackup, prepareRestore, restorePrepared, recoverPreferenceRestore, type PreparedRestore } from "./backup";
+import { validateBackup } from "./backup-validation";
+import type { BackupFile } from "./backup-format";
+import { prepareBankImport, applyBankImport, type ImportPreview } from "./db";
 import type { BankFile } from "./types";
-import { recordSessionAnswer, saveSessionDraft, buildBankExport, buildBundleExport, buildCurrentWrongReview, buildRepairReview, cancelReview, completeReview, createSession, db, deleteBank, favoriteQuestions, getBanks, getNodes, getNote, getQuestions, getReview, importBank, isFavorite, isKilled, isReviewed, killedQuestions, latestSession, librarySummary, noteQuestions, questionsForScope, reviewQuestions, saveNote, saveReview, saveSession, sessionById, stats, toggleFavorite, toggleKilled, updateQuestionContent, validateBank, validateBundle, wrongQuestions } from "./db";
+import { recordSessionAnswer, saveSessionDraft, buildBankExport, buildBundleExport, buildCurrentWrongReview, buildRepairReview, cancelReview, completeReview, createSession, db, deleteBank, favoriteQuestions, getBanks, getNodes, getNote, getQuestions, getReview, isFavorite, isKilled, isReviewed, killedQuestions, latestSession, librarySummary, noteQuestions, questionsForScope, reviewQuestions, saveNote, saveReview, saveSession, sessionById, stats, toggleFavorite, toggleKilled, updateQuestionContent, validateBank, validateBundle, wrongQuestions } from "./db";
 import type { BankRow, NodeRow, QuestionInput, QuestionRow, ReviewIssue, SessionRow } from "./types";
 import { parseQuestion } from "./types";
 
@@ -77,6 +81,7 @@ type DirectoryKind = "brush" | "memorization";
 type ListKind = "wrong" | "favorites" | "killed" | "notes" | "reviews";
 type ReturnTarget =
   | { view: "home" }
+  | { view: "backup" }
   | { view: "import" }
   | { view: "scope" }
   | { view: "choose"; nodeIds?: string[]; nodeId?: string }
@@ -183,6 +188,7 @@ function isReturnTarget(value: unknown): value is ReturnTarget {
   switch (route.view) {
     case "home":
     case "import":
+    case "backup":
     case "scope":
     case "presets":
     case "stats":
@@ -227,6 +233,7 @@ async function renderRoute(route: Route): Promise<void> {
   switch (route.view) {
     case "home": return home();
     case "import": return importView();
+    case "backup": return backupView();
     case "scope": return scopeView();
     case "choose": return chooseScope(route.nodeIds ?? (route.nodeId ? [route.nodeId] : []));
     case "directory": return directoryView(route);
@@ -320,8 +327,10 @@ async function importView() {
     </div>`).join("");
   shell("题库管理", `<input id="file" class="visually-hidden-file" type="file" accept="application/json,.json" multiple>
     <div id="message" class="message"></div>
+    <div id="import-previews">${importPreviewsHtml()}</div>
     ${banks.length ? `<section><h2 class="section-title">已导入题库</h2>${exportToolbar}<div class="bank-list">${rows}</div></section>` : `${emptyState("还没有题库","导入 Knoop JSON 题库后，就可以选择范围开始学习。",{text:"导入题库",id:"pick-import"})}`}
-    ${killed.length ? `<section><h2 class="section-title">题目管理</h2>${button(`已斩杀 ${killed.length} 题`,"killed")}</section>`:""}`,
+    ${killed.length ? `<section><h2 class="section-title">题目管理</h2>${button(`已斩杀 ${killed.length} 题`,"killed")}</section>`:""}
+    <section><h2 class="section-title">学习状态</h2>${button("完整备份 / 恢复","backup")}</section>`,
     true,
     `<button class="header-action" data-action="pick-import">导入</button>`);
   const updateExportToolbar = () => {
@@ -335,36 +344,94 @@ async function importView() {
     input.checked ? selectedExportBanks.add(id) : selectedExportBanks.delete(id);
     updateExportToolbar();
   };
-  document.querySelector<HTMLInputElement>("#file")!.onchange = async e => {
-    const files = [...((e.target as HTMLInputElement).files ?? [])]; if (!files.length) return;
-    message(`正在导入 ${files.length} 个文件……`);
-    let success = 0, repaired = 0, questions = 0; const failures: string[] = [];
-    for (const file of files) {
-      let raw: unknown;
-      try { raw = JSON.parse(await file.text()); }
-      catch (err) { failures.push(`${file.name}：${err instanceof Error ? err.message : String(err)}`); continue; }
-      try {
-        if (raw && typeof raw === "object" && (raw as {format?:unknown}).format === "knoop-bundle") {
-          const bundle = validateBundle(raw);
-          for (let index = 0; index < bundle.banks.length; index++) {
-            try {
-              const bank = validateBank(bundle.banks[index]); const result = await importBank(bank);
-              success++; repaired += result.repaired; questions += bank.questions.length;
-            } catch (err) {
-              const rawBank = bundle.banks[index] as { import?: { bankTitle?: unknown } };
-              const label = typeof rawBank?.import?.bankTitle === "string" ? rawBank.import.bankTitle : `第 ${index + 1} 个题库`;
-              failures.push(`${file.name} / ${label}：${err instanceof Error ? err.message : String(err)}`);
-            }
-          }
-        } else {
-          const bank = validateBank(raw); const result = await importBank(bank); success++; repaired += result.repaired; questions += bank.questions.length;
-        }
-      } catch (err) { failures.push(`${file.name}：${err instanceof Error ? err.message : String(err)}`); }
-    }
-    await importView();
-    const summary = `成功 ${success} 个题库，共 ${questions} 项${repaired ? `；完成返修 ${repaired} 题` : ""}${failures.length ? `；失败 ${failures.length}` : ""}`;
-    message(failures.length ? `${summary}\n${failures.join("\n")}` : summary, failures.length ? "error" : "ok");
+  if(importFeedback)message(importFeedback,"ok");
+  document.querySelector<HTMLInputElement>("#file")!.onchange = e => {
+    const files=[...((e.target as HTMLInputElement).files??[])];if(!files.length)return;
+    void withStudyAction(()=>queueImportFiles(files)).catch(reportSaveError);
   };
+}
+
+let nextImportId=0;
+let importQueue:Array<{id:number;label:string;raw:unknown;preview?:ImportPreview;error?:string}>=[];
+let importFeedback="";
+function importPreviewsHtml():string{
+  return importQueue.map(entry=>{
+    const s=entry.preview?.summary;
+    return `<section class="card"><h2>${esc(entry.label)}</h2>${s?`<p>${esc(s.title)} · ${esc(s.bankId)} · ${s.mode==="new"?"新建题库":"合并题库"}</p><p>新增 ${s.added} · 内容覆盖 ${s.changed} · 相同 ${s.unchanged} · 保留文件外内容 ${s.omitted}</p><p>${Object.entries(s.types).map(([type,count])=>`${esc(questionTypeLabel({type} as QuestionInput))} ${count}`).join(" · ")}</p>${s.changed?`<p>将覆盖 ${s.changed} 项已有内容，可能包含你的本地编辑；答案变更 ${s.answerChanges} 项，历史判分保留。</p>`:""}`:""}${entry.error?`<p class="message error">${esc(entry.error)}</p>`:""}<div class="grid">${button("取消",`cancel-import:${entry.id}`)}${s?button("确认导入",`confirm-import:${entry.id}`,"primary"):""}</div></section>`;
+  }).join("");
+}
+async function refreshImportPreviews():Promise<void>{
+  for(const entry of importQueue){if(entry.raw===null&&entry.error)continue;try{entry.preview=await prepareBankImport(entry.raw as BankFile);entry.error=undefined;}catch(error){entry.preview=undefined;entry.error=error instanceof Error?error.message:String(error);}}
+}
+async function queueImportFiles(files:File[]):Promise<void>{
+  importQueue=[];importFeedback="";
+  for(const file of files){
+    try{
+      const raw:unknown=JSON.parse(await file.text());
+      if(raw&&typeof raw==="object"&&(raw as {format?:unknown}).format==="knoop-bundle"){
+        const bundle=validateBundle(raw);
+        bundle.banks.forEach((bank,index)=>importQueue.push({id:++nextImportId,label:`${file.name} / 第 ${index+1} 个题库`,raw:bank}));
+      }else importQueue.push({id:++nextImportId,label:file.name,raw});
+    }catch(error){importQueue.push({id:++nextImportId,label:file.name,raw:null,error:error instanceof Error?error.message:String(error)});}
+  }
+  await refreshImportPreviews();
+  await importView();
+}
+async function confirmImport(id:number):Promise<void>{
+  const entry=importQueue.find(item=>item.id===id);if(!entry?.preview)return;
+  try{
+    const result=await applyBankImport(entry.preview),s=entry.preview.summary;
+    importFeedback+=`${importFeedback?"\n":""}已成功导入 ${entry.label}：新增 ${s.added}，内容覆盖 ${s.changed}，保留文件外内容 ${s.omitted}${result.repaired?`；完成返修 ${result.repaired} 题`:""}`;
+    importQueue=importQueue.filter(item=>item.id!==id);
+  }catch(error){notify(`未导入：${error instanceof Error?error.message:String(error)}；请核对刷新后的预览，再确认。`);}
+  await refreshImportPreviews();await importView();
+}
+
+let restoreFile:BackupFile|null=null;
+let restorePlan:PreparedRestore|null=null;
+let backupMessage="";
+let restoreSyncPending=false;
+function reloadLearningState():void{
+  const collapse=loadScopeCollapseState();collapsedScopeNodes=collapse.nodes;scopeCollapseInitialized=collapse.initialized;
+  enabledBrushTypes=loadBrushTypes();scopePresets=loadScopePresets();selectedScopeNodes.clear();selectedExportBanks.clear();scopeNodesCache=[];scopeContentNodeIds.clear();
+  activeSession=null;activeRows=[];selection.clear();excludedOptions.clear();blankValue="";pageState={};aiPreview=null;importQueue=[];importFeedback="";
+}
+function backupSummary(file:BackupFile):string{
+  const c=file.counts;return `<p>题库 ${c.banks} · 内容 ${c.questions} · 作答 ${c.attempts} · 会话 ${c.sessions}</p><p>笔记 ${c.notes} · 收藏 ${c.favorites} · 斩杀 ${c.killed_questions} · 待返修 ${c.question_reviews}</p><p>答案修订 ${c.question_answer_revisions} · 临时题组 ${c.ai_review_groups} · 批次任务 ${c.ai_review_batch_jobs}</p><p>来源版本 ${esc(file.appVersion)} · ${esc(formatUpdatedAt(file.exportedAt))}</p>`;
+}
+function requireBackupIdle():void{if(batchRunningJobId||aiPendingRequestId||aiSavingGroup||batchSavingReady)throw new Error("请先结束正在运行的 AI 任务，再备份或恢复");}
+async function backupView():Promise<void>{
+  if(restoreSyncPending){shell("完成恢复设置",`<p>恢复操作的设置同步尚未完成，请重试完成同步后继续学习。</p><p class="message error">${esc(backupMessage)}</p>${button("重试设置同步","backup-sync","primary")}`,false);return;}
+  let archives="";
+  try{
+    const copies=await invoke<Array<{name:string;bytes:number}>>("list_restore_safety_copies");
+    if(copies.length)archives=`<details class="card"><summary>恢复前安全副本（${copies.length}）</summary><p>最近 10 份，可重新载入并预览恢复。</p>${copies.slice(0,10).map(copy=>{const stamp=copy.name.match(/(\d+)\.json$/)?.[1];const date=stamp?new Date(Number(BigInt(stamp)/1000000n)).toISOString():"";return button(`${date?formatUpdatedAt(date):"安全副本"} · ${Math.ceil(copy.bytes/1024)} KB`,`backup-load:${copy.name}`);}).join("")}</details>`;
+  }catch(error){archives=`<p class="message error">安全副本列表暂不可用：${esc(error instanceof Error?error.message:String(error))}</p>`;}
+  const preview=restoreFile?`<section class="card"><h2>待恢复备份</h2>${backupSummary(restoreFile)}<p>恢复将完整替换本机题库与学习记录。API 配置保留，备份不包含 API Key。</p>${restorePlan?`<p>已生成恢复前安全副本，可在本页重新载入。</p>${button("确认替换并恢复","backup-confirm","destructive-action")}${button("另存恢复前备份","backup-save-before")}`:button("备份当前数据并准备恢复","backup-prepare","primary")}${button("取消恢复","backup-cancel")}</section>`:"";
+  shell("完整备份 / 恢复",`<p>完整保存题库、历史作答、笔记、收藏、进度、回炉结果及学习偏好；不包含 API Key。</p>${button("导出完整备份","backup-export","primary")}${button("选择完整备份","backup-pick")}<input id="backup-file" class="visually-hidden-file" type="file" accept="application/json,.json"><div id="backup-message" class="message error">${esc(backupMessage)}</div>${preview}${archives}`);
+  document.querySelector<HTMLInputElement>("#backup-file")!.onchange=e=>{
+    const file=(e.target as HTMLInputElement).files?.[0];if(!file)return;
+    void withStudyAction(async()=>{try{restoreFile=await validateBackup(JSON.parse(await file.text()));restorePlan=null;backupMessage="";}catch(error){restoreFile=null;restorePlan=null;backupMessage=error instanceof Error?error.message:String(error);}await backupView();}).catch(reportSaveError);
+  };
+}
+async function confirmRestore():Promise<void>{
+  if(!restorePlan||!confirm("确认用这份备份完整替换本机所有学习状态？\n\n题库、作答、笔记、收藏和进度将被替换。当前状态已有恢复前安全副本。"))return;
+  requireBackupIdle();
+  try{await restorePrepared(restorePlan);restoreFile=null;restorePlan=null;backupMessage="";reloadLearningState();history.replaceState({view:"home"} satisfies Route,"");await renderRoute({view:"home"});notify("完整学习状态已恢复","ok");}
+  catch(error){
+    restorePlan=null;backupMessage=error instanceof Error?error.message:String(error);
+    restoreSyncPending=(await (await db()).select<unknown[]>("SELECT id FROM backup_preference_journal WHERE id=1")).length>0;
+    await backupView();
+  }
+}
+async function backupAction(task:()=>Promise<void>):Promise<void>{
+  await withStudyAction(async()=>{
+    try{await task();}catch(error){backupMessage=error instanceof Error?error.message:String(error);await backupView();}
+  });
+}
+async function finishPreferenceRestore():Promise<void>{
+  await recoverPreferenceRestore();restoreSyncPending=false;restorePlan=null;restoreFile=null;backupMessage="";reloadLearningState();
+  history.replaceState({view:"home"} satisfies Route,"");await renderRoute({view:"home"});notify("恢复设置同步已完成","ok");
 }
 
 function buildScopeTree(nodes: NodeRow[]) {
@@ -1288,10 +1355,22 @@ async function exportSelectedBanks(){
 
 app.addEventListener("click",async e=>{const target=(e.target as HTMLElement).closest<HTMLElement>("[data-action]");if(!target||studyBusy)return;const action=target.dataset.action!;
   try {
+    if(restoreSyncPending&&action!=="backup-sync")return;
     if(!action.startsWith("option:")&&!action.startsWith("temp-")&&!action.startsWith("manual:")&&!["submit","next","toggle-quick","show-content"].includes(action))await flushDrafts();
     if(action==="back")return await goBack();
     if(action==="home")return await navigate({view:"home"});
     if(action==="import")return navigate({view:"import"});
+    if(action==="backup")return navigate({view:"backup"});
+    if(action.startsWith("confirm-import:"))return await withStudyAction(()=>confirmImport(Number(action.slice("confirm-import:".length))));
+    if(action.startsWith("cancel-import:")){importQueue=importQueue.filter(entry=>entry.id!==Number(action.slice("cancel-import:".length)));return importView();}
+    if(action==="backup-export")return await backupAction(async()=>{requireBackupIdle();const backup=await buildBackup();await saveJsonFile(`knoop-backup-${new Date().toISOString().slice(0,10)}.json`,backup,"Knoop 完整学习备份");});
+    if(action==="backup-pick"){document.querySelector<HTMLInputElement>("#backup-file")?.click();return;}
+    if(action==="backup-prepare")return await backupAction(async()=>{if(!restoreFile)return;requireBackupIdle();restorePlan=await prepareRestore(restoreFile);backupMessage="";await backupView();});
+    if(action==="backup-confirm")return await backupAction(confirmRestore);
+    if(action==="backup-save-before")return await backupAction(async()=>{if(restorePlan)await saveJsonFile(`knoop-before-restore-${new Date().toISOString().slice(0,10)}.json`,restorePlan.before,"恢复前完整备份");});
+    if(action==="backup-cancel"){restoreFile=null;restorePlan=null;backupMessage="";return backupView();}
+    if(action.startsWith("backup-load:"))return await backupAction(async()=>{const data=await invoke<string>("read_restore_safety_copy",{name:action.slice("backup-load:".length)});restoreFile=await validateBackup(JSON.parse(data));restorePlan=null;backupMessage="";await backupView();});
+    if(action==="backup-sync")return await backupAction(finishPreferenceRestore);
     if(action==="scope"){selectedScopeNodes.clear();return navigate({view:"scope"});}
     if(action==="presets")return navigate({view:"presets"});
     if(action==="wrong"||action==="favorites"||action==="killed"||action==="notes"||action==="reviews")return navigate({view:"list",kind:action});
@@ -1383,6 +1462,7 @@ app.addEventListener("click",async e=>{const target=(e.target as HTMLElement).cl
 
 window.addEventListener("popstate", async e => {
   try { await studyDone;await flushDrafts(); } catch(error){if(renderedRoute)history.replaceState(renderedRoute,"");reportSaveError(error);return;}
+  if(restoreSyncPending){history.replaceState({view:"backup"} satisfies Route,"");await backupView();return;}
   if(forcedBackTarget){const target=forcedBackTarget;forcedBackTarget=null;history.replaceState(target,"");void renderRoute(target);return;}
   const route = isRoute(e.state) ? e.state : ({view:"home"} satisfies Route);
   if(route.view!=="ai-review"&&aiPendingRequestId){void invoke("cancel_ai_review",{requestId:aiPendingRequestId}).catch(()=>{});aiPendingRequestId=null;}
@@ -1390,4 +1470,7 @@ window.addEventListener("popstate", async e => {
   void renderRoute(route);
 });
 
-db().then(async()=>{ const route = isRoute(history.state) ? history.state : ({view:"home"} satisfies Route); await navigate(route, true); }).catch(err=>{shell("启动失败",`<div class="message error">${esc(err instanceof Error?err.message:String(err))}</div>`,false);});
+db().then(async()=>{
+  try{await recoverPreferenceRestore();}catch(error){restoreSyncPending=true;backupMessage=error instanceof Error?error.message:String(error);history.replaceState({view:"backup"} satisfies Route,"");await backupView();return;}
+  reloadLearningState();const route = isRoute(history.state) ? history.state : ({view:"home"} satisfies Route);await navigate(route,true);
+}).catch(err=>{shell("启动失败",`<div class="message error">${esc(err instanceof Error?err.message:String(err))}</div>`,false);});

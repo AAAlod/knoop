@@ -113,18 +113,18 @@ export function validateBank(raw: unknown): BankFile {
   assertIdentifier(file.import.bankId, "bankId"); assertText(file.import.bankTitle, "bankTitle");
   if (!Array.isArray(file.nodes) || !Array.isArray(file.questions)) throw new Error("nodes 和 questions 必须是数组");
   const nodeIds = new Set<string>();
-  for (const node of file.nodes) {
+  for (const [index,node] of file.nodes.entries()) {
     assertIdentifier(node.id, "Node.id"); assertText(node.title, `Node ${node.id} title`);
     if (node.parentId !== null) assertIdentifier(node.parentId, `Node ${node.id} parentId`);
-    if (nodeIds.has(node.id)) throw new Error(`Node ID 重复：${node.id}`);
+    if (nodeIds.has(node.id)) throw new Error(`/nodes/${index}/id：Node ID 重复：${node.id}`);
     if (!Number.isInteger(node.order)) throw new Error(`Node ${node.id} order 必须是整数`);
     nodeIds.add(node.id);
   }
   const visiting = new Set<string>(); const visited = new Set<string>();
   const parents = new Map(file.nodes.map(n => [n.id, n.parentId]));
-  if(file.import.mode==="new")for(const node of file.nodes)if(node.parentId&&!nodeIds.has(node.parentId))throw new Error(`Node ${node.id} parentId 引用了不存在的 Node：${node.parentId}`);
+  if(file.import.mode==="new")for(const [index,node] of file.nodes.entries())if(node.parentId&&!nodeIds.has(node.parentId))throw new Error(`/nodes/${index}/parentId：Node ${node.id} 引用了不存在的 Node：${node.parentId}`);
   const visit = (id: string) => {
-    if (visiting.has(id)) throw new Error(`Node 存在循环：${id}`);
+    if (visiting.has(id)) throw new Error(`/nodes/${file.nodes.findIndex(n=>n.id===id)}/parentId：Node 存在循环：${id}`);
     if (visited.has(id)) return;
     visiting.add(id); const parent = parents.get(id);
     if (parent && parents.has(parent)) visit(parent);
@@ -132,10 +132,10 @@ export function validateBank(raw: unknown): BankFile {
   };
   file.nodes.forEach(n => visit(n.id));
   const questionIds = new Set<string>();
-  for (const q of file.questions) {
+  for (const [index,q] of file.questions.entries()) {
     assertIdentifier(q.id, "Question.id"); assertIdentifier(q.nodeId, `Question ${q.id} nodeId`);
-    if (questionIds.has(q.id)) throw new Error(`Question ID 重复：${q.id}`);
-    if (!nodeIds.has(q.nodeId) && file.import.mode === "new") throw new Error(`Question ${q.id} 引用了不存在的 Node`);
+    if (questionIds.has(q.id)) throw new Error(`第 ${index+1} 题（${q.id}） /questions/${index}/id：Question ID 重复`);
+    if (!nodeIds.has(q.nodeId) && file.import.mode === "new") throw new Error(`第 ${index+1} 题（${q.id}） /questions/${index}/nodeId：引用了不存在的 Node`);
     if (!["single_choice", "multiple_choice", "blank", "recall", "memorization"].includes(q.type)) throw new Error(`Question ${q.id} 题型不支持`);
     if (q.type === "memorization" && file.version !== "1.1") throw new Error(`Question ${q.id} 使用 memorization 时题库版本必须为 1.1`);
     if (!Number.isInteger(q.order)) throw new Error(`Question ${q.id} order 必须是整数`);
@@ -153,7 +153,7 @@ export function validateBank(raw: unknown): BankFile {
       const optionIds = new Set<string>();
       q.options.forEach(o => { assertOptionIdentifier(o.id, `${q.id} option.id`); assertText(o.text, `${q.id} option.text`); if (optionIds.has(o.id)) throw new Error(`${q.id} 选项 ID 重复`); optionIds.add(o.id); });
       const answers = Array.isArray(q.answer) ? q.answer : [q.answer];
-      if ((q.type === "single_choice" && typeof q.answer !== "string") || (q.type === "multiple_choice" && (!Array.isArray(q.answer) || !q.answer.length || new Set(q.answer).size !== q.answer.length)) || answers.some(a => typeof a !== "string" || !optionIds.has(a))) throw new Error(`${q.id} 答案不是有效选项或包含重复项`);
+      if ((q.type === "single_choice" && typeof q.answer !== "string") || (q.type === "multiple_choice" && (!Array.isArray(q.answer) || !q.answer.length || new Set(q.answer).size !== q.answer.length)) || answers.some(a => typeof a !== "string" || !optionIds.has(a))) throw new Error(`第 ${index+1} 题（${q.id}） /questions/${index}/answer：答案不是有效选项或包含重复项`);
     }
     if (q.type === "blank" && typeof q.answer !== "string") throw new Error(`${q.id} 填空答案必须是字符串`);
     questionIds.add(q.id);
