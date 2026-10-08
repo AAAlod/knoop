@@ -94,7 +94,7 @@ type Route = ReturnTarget
   | { view: "ai-review"; questionId: string };
 
 const esc = (s: unknown) => String(s ?? "").replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c]!));
-const button = (text: string, action: string, cls = "") => `<button class="${cls}" data-action="${esc(action)}">${esc(text)}</button>`;
+const button = (text: string, action: string, cls = "") => `<button type="button" class="${cls}" data-action="${esc(action)}">${esc(text)}</button>`;
 const chevronIcon = (collapsed = false) => `<svg class="chevron-icon${collapsed?" is-collapsed":""}" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m5 9 7 7 7-7"/></svg>`;
 const graded = (q: QuestionRow | QuestionInput) => q.type === "single_choice" || q.type === "multiple_choice" || q.type === "blank";
 const brushTypes = ["single_choice","multiple_choice","blank","recall"] as const;
@@ -261,20 +261,32 @@ async function goBack(): Promise<void> {
   history.back();
 }
 
+function sessionSummary(session: SessionRow): string {
+  const modes: Record<string,string> = {sequential:"顺序刷题",random:"随机刷题",wrong:"错题练习",favorites:"收藏练习",recall:"背诵卡",memorization:"背诵"};
+  let total = 0, quick = false;
+  try { const ids: unknown = JSON.parse(session.question_ids_json); if(Array.isArray(ids))total=ids.length; } catch {}
+  try { quick = !!JSON.parse(session.state_json || "{}").quickMode; } catch {}
+  const current = total ? Math.min(Math.max(0,session.current_index)+1,total) : 0;
+  return `${modes[session.mode] ?? "学习"}${quick ? " · 快刷" : ""} · ${current} / ${total}`;
+}
+
 async function home() {
   activeSession = null; activeRows = []; selection.clear(); excludedOptions.clear(); blankValue = ""; quickMode = false; pageState = {};
   selectedScopeNodes.clear(); scopeNodesCache = []; scopeContentNodeIds.clear();
-  const resume = await latestSession(); const summary = await librarySummary(); const pendingReviews = (await reviewQuestions()).length; const tempGroupCount = (await listTempGroups()).length; const previousBatchJob = await latestBatchJob();
+  const resume = await latestSession(); const summary = await librarySummary([...enabledBrushTypes]); const pendingReviews = (await reviewQuestions()).length; const tempGroupCount = (await listTempGroups()).length; const previousBatchJob = await latestBatchJob();
   const recent = scopePresets.find(p=>p.id===recentPresetId());
-  const recentCard = recent ? `<section class="home-recent-preset"><div><small>最近组题</small><b>${esc(recent.name)}</b><span>${esc(presetSummary(recent))}</span></div><button class="primary" data-action="start-preset:${esc(recent.id)}">开始</button></section>` : "";
+  const recentCard = recent ? `<section class="home-recent-preset"><div><small>最近组题</small><b>${esc(recent.name)}</b><span>${esc(presetSummary(recent))}</span></div><button type="button" data-action="start-preset:${esc(recent.id)}">开始</button></section>` : "";
   const filters = brushTypes.map(type => `<button class="type-filter ${enabledBrushTypes.has(type)?"active":""}" data-action="filter-type:${type}" aria-pressed="${enabledBrushTypes.has(type)}">${brushLabels[type]}</button>`).join("");
-  app.innerHTML = `<main class="home-main"><div class="home-heading"><h1>Knoop</h1><p>从自己的题库开始练习</p></div><div class="home-summary">${summary.banks} 个题库<span>${summary.questions} 项内容</span></div>
+  app.innerHTML = `<main class="home-main"><div class="home-heading"><h1>Knoop</h1><p>从自己的题库开始练习</p></div><div class="home-summary"><span>${summary.banks} 个题库</span><span>总内容 ${summary.totalContent} 项</span><span>可刷 ${summary.questions} 题</span><span>背诵材料 ${summary.memorization} 项</span></div><p class="home-count-help">总内容与背诵材料含斩杀、待返修；可刷题数按下方题型筛选。</p>
+    <section class="home-group home-study"><h2 class="section-title">开始学习</h2><div class="stack">
+      ${resume ? `<div class="home-resume">${button("继续上次学习", `resume:${resume.id}`, "primary")}<p class="home-session-summary">${esc(sessionSummary(resume))}</p></div>` : ""}
+      ${summary.banks ? button("开始新练习 · 选择范围", "scope", resume ? "" : "primary") : button("导入题库，开始学习", "import", resume ? "" : "primary")}
+    </div></section>
     <div class="type-filter-row"><span>刷题题型</span><div class="type-filter-options">${filters}</div></div>
-    ${recentCard}
-    <section class="home-group"><h2 class="section-title">开始学习</h2><div class="stack">
-      ${resume ? button("继续上次学习", `resume:${resume.id}`, "primary") : ""}
-      ${summary.banks ? button("选择范围", "scope", "primary") : button("导入题库，开始学习", "import", "primary")}
+    <section class="home-group"><h2 class="section-title">常用练习</h2>${recentCard}<div class="stack">
       ${button("常用组题", "presets")}
+    </div></section>
+    <section class="home-group"><h2 class="section-title">AI 回炉</h2><div class="stack">
       ${button(tempGroupCount ? `AI 回炉题组 ${tempGroupCount}` : "AI 回炉题组", "temp-groups")}
       ${previousBatchJob ? button("继续批量回炉",`batch-open:${previousBatchJob.id}`) : ""}
     </div></section>
@@ -396,7 +408,7 @@ async function scopeView(focusAction = "") {
     return `<section class="scope-bank"><div class="bank-heading"><label class="scope-check bank-check"><input type="checkbox" data-bank-check="${esc(b.id)}" data-action="scope-bank:${esc(b.id)}" ${state.checked ? "checked" : ""}><span class="bank-heading-text"><b>${esc(b.title)}</b><small>更新 ${esc(formatUpdatedAt(b.updated_at))}</small></span></label>${bankCollapsible.length?`<button class="bank-fold" data-action="scope-bank-fold:${esc(b.id)}" aria-label="${allCollapsed?"展开此题库":"折叠此题库"}" title="${allCollapsed?"展开此题库":"折叠此题库"}" aria-expanded="${!allCollapsed}">${chevronIcon(allCollapsed)}</button>`:""}</div>${roots.map(n => renderNode(n)).join("")}</section>`;
   };
   const selectedCount = selectedScopeNodes.size;
-  const selectedRows = allQuestions.filter(q => selectedScopeNodes.has(q.node_id));
+  const selectedRows = await questionsForScope([...selectedScopeNodes]);
   const brushCount = selectedRows.filter(isEnabledBrush).length;
   const memorizationCount = selectedRows.filter(q => q.type === "memorization").length;
   const allExpanded = collapsibleIds.size > 0 && [...collapsibleIds].every(id => !collapsedScopeNodes.has(id));
@@ -495,7 +507,7 @@ async function chooseScope(nodeIds: string[]) {
   const rows = await questionsForScope(nodeIds);
   const answerable = rows.filter(isEnabledBrush); const memorization = rows.filter(q=>q.type==="memorization");
   const activeNames = brushTypes.filter(t=>enabledBrushTypes.has(t)).map(t=>brushLabels[t]).join(" / ") || "无";
-  const brushCard = answerable.length ? `<section class="card"><h2>刷题 ${answerable.length} 项</h2><p>题型：${activeNames}</p>
+  const brushCard = answerable.length ? `<section class="card"><h2>可刷 ${answerable.length} 题</h2><p>题型：${activeNames}</p>
     ${button("顺序刷题","start-scope:sequential","primary")}
     <label>随机题数<input id="random-count" type="number" min="1" max="${answerable.length}" value="${Math.min(10,answerable.length)}"></label>
     ${button("随机刷题","start-scope:random")}
@@ -609,7 +621,7 @@ async function quizView(){
   else if(q.type==="memorization") content=memorizationBody(q,shown);
   else {
     content=`<div class="type">${q.type==="single_choice"?"单选题":q.type==="multiple_choice"?"多选题":"填空题"}</div><h2 class="stem">${esc(q.stem)}</h2>`;
-    if(q.options) content+=`<div class="options">${q.options.map(o=>`<button class="option ${selection.has(o.id)?"selected":""} ${excludedOptions.has(o.id)?"excluded":""} ${pageState.submitted?(Array.isArray(q.answer)?q.answer:[q.answer]).includes(o.id)?"right":selection.has(o.id)?"wrong":"":""}" data-action="option:${esc(o.id)}" data-option-id="${esc(o.id)}" ${pageState.submitted?"disabled":""}><b>${esc(o.id)}</b><span>${esc(o.text)}</span></button>`).join("")}</div>`;
+    if(q.options) content+=`${!pageState.submitted && !pageState.pendingManual ? '<p class="option-help">长按选项可标记排除，再次长按可撤销。</p>' : ''}<div class="options">${q.options.map(o=>`<button class="option ${selection.has(o.id)?"selected":""} ${excludedOptions.has(o.id)?"excluded":""} ${pageState.submitted?(Array.isArray(q.answer)?q.answer:[q.answer]).includes(o.id)?"right":selection.has(o.id)?"wrong":"":""}" data-action="option:${esc(o.id)}" data-option-id="${esc(o.id)}" ${pageState.submitted?"disabled":""}><b>${esc(o.id)}</b><span>${esc(o.text)}</span></button>`).join("")}</div>`;
     if(q.type==="blank") content+=`<input id="blank" class="blank" placeholder="输入答案" value="${esc(blankValue)}" ${pageState.submitted||pageState.pendingManual?"disabled":""}>`;
     if(pageState.submitted||pageState.pendingManual) content+=resultPanel(q);
   }
@@ -674,6 +686,7 @@ async function editQuestionView(questionId:string) {
     ? button("保存",`save-edit:${questionId}`,"primary")
     : `${button("保存",`save-edit:${questionId}`)}${button("保存并送审",`save-edit-review:${questionId}`,"primary")}`;
   shell("编辑",`<form id="question-editor" class="editor card" data-question-id="${esc(questionId)}">${fields}<div id="message" class="message"></div><div class="edit-actions form-bottom-actions">${actions}</div></form>`);
+  document.querySelector<HTMLFormElement>("#question-editor")!.addEventListener("submit", e => e.preventDefault());
 }
 
 function changedReviewIssues(before: QuestionInput, after: QuestionInput): ReviewIssue[] {
@@ -832,14 +845,15 @@ async function listView(kind:ListKind) {
     const previousBatch=await latestBatchJob();
     const actions=`${button("导出","export-error-review")}${button("批量回炉","batch-new")}${rows.some(graded)?button("练习","practice:wrong"):""}${previousBatch?button("继续批量任务",`batch-open:${previousBatch.id}`):""}`;
     const body=rows.map(r=>{const q=parseQuestion(r);const difference=q.type==="multiple_choice"?multipleChoiceDifference(q,r.latest_user_answer):`<b>本次错误答案</b><div class="multiline">${esc(storedUserAnswerText(q,r.latest_user_answer))}</div>`;const extra=`<section class="expanded-meta wrong-meta">${difference}<small>${esc(r.latest_answered_at)}</small></section>`;return expandableCard("wrong",r,"",button("AI 回炉",`ai-review:${encodeURIComponent(r.id)}`),extra)}).join("");
-    return shell("当前错题",rows.length?`${actions}<div class="question-list compact-list">${body}</div>`:emptyState("暂无错题","答错的题目会显示在这里。",{text:"去学习",id:"scope"}),true,rows.length?listHeaderToggle("wrong",rows.map(r=>r.id)):"");
+    const semantics = "最近一次答错的题目才显示，之后答对会自动移出；已斩杀、待返修题目不显示。";
+    return shell("当前错题",rows.length?`<p class="list-help">${semantics}</p>${actions}<div class="question-list compact-list">${body}</div>`:emptyState("暂无当前错题",semantics,{text:"去学习",id:"scope"}),true,rows.length?listHeaderToggle("wrong",rows.map(r=>r.id)):"");
   }
   const rows=await favoriteQuestions();
   const actions=rows.some(graded)?button(`练习 ${rows.filter(graded).length} 题`,`practice:favorites`,"primary"):"";
   const body=rows.map(r=>expandableCard("favorites",r,"","","")).join("");
   return shell("收藏",rows.length?`${actions}<div class="question-list compact-list">${body}</div>`:emptyState("暂无收藏","收藏的题目会显示在这里。",{text:"去学习",id:"scope"}),true,rows.length?listHeaderToggle("favorites",rows.map(r=>r.id)):"");
 }
-async function statsView(){const s=await stats();shell("基础统计",`<div class="stats"><div><b>${s.total}</b><span>总作答</span></div><div><b>${s.correct}</b><span>正确</span></div><div><b>${s.wrong}</b><span>错误</span></div><div><b>${s.rate}%</b><span>正确率</span></div><div><b>${s.currentWrong}</b><span>当前错题</span></div></div>`);}
+async function statsView(){const s=await stats();shell("基础统计",`<div class="stats"><div><b>${s.total}</b><span>总作答次数</span></div><div><b>${s.correct}</b><span>正确作答次数</span></div><div><b>${s.wrong}</b><span>错误作答次数</span></div><div><b>${s.rate}%</b><span>历史作答正确率</span></div><div><b>${s.currentWrong}</b><span>当前错题数</span></div></div><p class="list-help">作答次数累计保留现存记录，排除待返修题目；当前错题只看最近一次作答，答对后自动移出，并排除已斩杀、待返修题目。</p>`);}
 
 async function saveJsonFile(filename:string,data:unknown,title:string){
   const text=JSON.stringify(data,null,2); const file=new File([text],filename,{type:"application/json"});
@@ -1302,8 +1316,8 @@ app.addEventListener("click",async e=>{const target=(e.target as HTMLElement).cl
     if(action.startsWith("save-note:"))return saveQuestionNote(action.slice("save-note:".length));
     if(action.startsWith("delete-note:")){const id=action.slice("delete-note:".length);if(!confirm("删除这条笔记？"))return;await saveNote(id,"");notify("已删除笔记","ok");return goBack();}
     if(action.startsWith("edit:")){const current=isRoute(history.state)?history.state:null;return navigate({view:"edit",questionId:action.slice(5),returnTo:asReturnTarget(current)});}
-    if(action.startsWith("save-edit-review:"))return saveQuestionEdit(action.slice("save-edit-review:".length),true);
-    if(action.startsWith("save-edit:"))return saveQuestionEdit(action.slice("save-edit:".length));
+    if(action.startsWith("save-edit-review:"))return await saveQuestionEdit(action.slice("save-edit-review:".length),true);
+    if(action.startsWith("save-edit:"))return await saveQuestionEdit(action.slice("save-edit:".length));
     if(action.startsWith("practice:")){const rows=action.endsWith("wrong")?await wrongQuestions():await favoriteQuestions();return startRows(action.endsWith("wrong")?"wrong":"favorites",rows.filter(graded));}
   } catch(err){notify(err instanceof Error?err.message:String(err));}
 });

@@ -256,3 +256,13 @@ main:has(.form-bottom-actions){padding-bottom:calc(132px + env(safe-area-inset-b
 .review-actions .destructive-action{border:1px solid #edcbc6;background:#fff1f0;color:#a33;box-shadow:none}
 
 .ai-settings summary{cursor:pointer;font-weight:700}.ai-settings p,.ai-preview>p{color:#666;font-size:13px;line-height:1.5}.ai-preview>h2{font-size:18px;margin-top:24px}.ai-preview .card h3{margin:0 0 12px}.ai-config-status{overflow-wrap:anywhere}
+
+/* Review A: local home hierarchy and unobtrusive interaction help. */
+.home-summary{flex-wrap:wrap;gap:6px 16px;margin-bottom:6px}
+.home-count-help,.home-session-summary,.option-help,.list-help{color:#666;font-size:13px;line-height:1.5;overflow-wrap:anywhere}
+.home-count-help{margin:0 2px 16px;font-size:12px}
+.home-study{margin-top:16px;margin-bottom:18px}
+.home-resume{min-width:0}.home-resume button{width:100%}
+.home-session-summary{margin:7px 2px 0;color:#275d4b}
+.home-main .stack>button{min-width:0;width:100%;white-space:normal}
+.option-help{margin:0 0 10px}

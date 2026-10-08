@@ -182,11 +182,13 @@ export async function importBank(file: BankFile): Promise<{ repaired: number }> 
 }
 
 export async function getBanks() { return (await db()).select<BankRow[]>("SELECT id,title,created_at,updated_at FROM banks ORDER BY created_at"); }
-export async function librarySummary() {
+export async function librarySummary(enabledTypes: readonly string[] = ['single_choice','multiple_choice','blank','recall']) {
   const conn = await db();
   const bank = (await conn.select<{n:number}[]>("SELECT COUNT(*) n FROM banks"))[0]?.n ?? 0;
-  const questions = (await conn.select<{n:number}[]>("SELECT COUNT(*) n FROM questions WHERE type IN ('single_choice','multiple_choice','blank','recall') AND id NOT IN (SELECT question_id FROM killed_questions)"))[0]?.n ?? 0;
-  return { banks: bank, questions };
+  const content = (await conn.select<{totalContent:number;memorization:number}[]>("SELECT COUNT(*) totalContent, COALESCE(SUM(CASE WHEN type='memorization' THEN 1 ELSE 0 END),0) memorization FROM questions"))[0];
+  const types = [...new Set(enabledTypes)].filter(t => ['single_choice','multiple_choice','blank','recall'].includes(t));
+  const questions = types.length ? (await conn.select<{n:number}[]>(`SELECT COUNT(*) n FROM questions WHERE type IN (${types.map((_,i)=>`$${i+1}`).join(',')}) AND id NOT IN (SELECT question_id FROM killed_questions)`, types))[0]?.n ?? 0 : 0;
+  return { banks: bank, totalContent: content.totalContent, questions, memorization: content.memorization };
 }
 export async function getNodes(bankId?: string) { return (await db()).select<NodeRow[]>(`SELECT * FROM nodes${bankId ? " WHERE bank_id = $1" : ""} ORDER BY sort_order,title`, bankId ? [bankId] : []); }
 const sqlChunkSize = 400;
