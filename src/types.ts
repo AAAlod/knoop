@@ -36,7 +36,7 @@ export interface BankBundleFile {
 }
 export interface NodeRow { id: string; external_id: string; bank_id: string; parent_id: string | null; title: string; sort_order: number }
 export interface QuestionRow { id: string; external_id: string; bank_id: string; node_id: string; type: QuestionType; sort_order: number; content_json: string }
-export interface SessionRow { id: string; mode: string; scope_json: string; question_ids_json: string; current_index: number; state_json: string; completed_at: string | null }
+export interface SessionRow { id: string; mode: string; scope_json: string; question_ids_json: string; current_index: number; state_json: string; created_at:string; updated_at:string; completed_at: string | null }
 
 export interface AiGuidance {
   purpose: string;

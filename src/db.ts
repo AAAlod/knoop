@@ -337,6 +337,7 @@ export async function createSession(mode: string, scope: unknown, questionIds: s
   return id;
 }
 export async function latestSession() { const rows = await (await db()).select<SessionRow[]>("SELECT * FROM sessions WHERE completed_at IS NULL ORDER BY updated_at DESC LIMIT 1"); return rows[0] ?? null; }
+export async function unfinishedSessions() { return (await db()).select<SessionRow[]>("SELECT * FROM sessions WHERE completed_at IS NULL ORDER BY updated_at DESC,id"); }
 export async function sessionById(id: string) { const rows = await (await db()).select<SessionRow[]>("SELECT * FROM sessions WHERE id=$1", [id]); return rows[0] ?? null; }
 export async function saveSession(id: string, index: number, state: unknown, complete = false) { const stamp = now(); await (await db()).execute("UPDATE sessions SET current_index=$2,state_json=$3,updated_at=$4,completed_at=CASE WHEN $5=1 THEN $4 ELSE completed_at END WHERE id=$1", [id,index,JSON.stringify(state),stamp,complete ? 1 : 0]); }
 export async function addAttempt(questionId: string, sessionId: string, answer: unknown, gradingMode: string, correct: boolean) { await (await db()).execute("INSERT INTO attempts(question_id,session_id,user_answer,grading_mode,is_correct,answered_at) VALUES($1,$2,$3,$4,$5,$6)", [questionId,sessionId,JSON.stringify(answer),gradingMode,correct ? 1 : 0,now()]); }

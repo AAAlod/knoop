@@ -5,12 +5,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { parseAiReviewBank } from "./ai-review";
 import { candidateFingerprint, checkedCandidateIds, createBatchJob, deleteBatchJob, GENERATED_PER_SOURCE, getBatchJob, jobBatches, jobReview, latestBatchJob, MAX_SOURCES_PER_RUN, saveBatchJob, saveReadyBatchCandidates, sourceKey, SOURCES_PER_BATCH } from "./batch-review";
 import { gradeQuestion } from "./grading";
-import { createTempGroup, deleteTempGroup, emptyTempState, getTempGroup, listTempGroups, restartTempGroup, saveTempProgress, tempBank, tempResults, tempState } from "./temp-review";
+import {indexDirectory,searchDirectory,searchText,type DirectoryEntry} from "./directory-search";
+import { createTempGroup, deleteTempGroup, emptyTempState, getTempGroup, listTempGroups, restartTempGroup, saveTempProgress, tempBank, tempResults, tempState, type TempState } from "./temp-review";
 import { enqueueDraft, flushDrafts } from "./state-writes";
 import { buildBackup, prepareRestore, restorePrepared, recoverPreferenceRestore, type PreparedRestore } from "./backup";
 import { validateBackup } from "./backup-validation";
 import type { BackupFile } from "./backup-format";
 import { prepareBankImport, applyBankImport, type ImportPreview } from "./db";
+import {unfinishedSessions} from "./db";
 import type { BankFile } from "./types";
 import { recordSessionAnswer, saveSessionDraft, buildBankExport, buildBundleExport, buildCurrentWrongReview, buildRepairReview, cancelReview, completeReview, createSession, db, deleteBank, favoriteQuestions, getBanks, getNodes, getNote, getQuestions, getReview, isFavorite, isKilled, isReviewed, killedQuestions, latestSession, librarySummary, noteQuestions, questionsForScope, reviewQuestions, saveNote, saveReview, saveSession, sessionById, stats, toggleFavorite, toggleKilled, updateQuestionContent, validateBank, validateBundle, wrongQuestions } from "./db";
 import type { BankRow, NodeRow, QuestionInput, QuestionRow, ReviewIssue, SessionRow } from "./types";
@@ -87,6 +89,7 @@ type ReturnTarget =
   | { view: "choose"; nodeIds?: string[]; nodeId?: string }
   | { view: "directory"; nodeIds?: string[]; sessionId?: string; kind?: DirectoryKind; query?: string }
   | { view: "session"; id: string }
+  | { view: "sessions" }
   | { view: "list"; kind: ListKind }
   | { view: "presets" }
   | { view: "stats" }
@@ -192,6 +195,7 @@ function isReturnTarget(value: unknown): value is ReturnTarget {
     case "scope":
     case "presets":
     case "stats":
+    case "sessions":
     case "temp-groups":
       return true;
     case "choose":
@@ -238,6 +242,7 @@ async function renderRoute(route: Route): Promise<void> {
     case "choose": return chooseScope(route.nodeIds ?? (route.nodeId ? [route.nodeId] : []));
     case "directory": return directoryView(route);
     case "session": return openSession(route.id);
+    case "sessions": return sessionsView();
     case "edit": return editQuestionView(route.questionId);
     case "note": return noteView(route.questionId);
     case "review": return reviewView(route.questionId);
@@ -294,6 +299,7 @@ async function home() {
   app.innerHTML = `<main class="home-main"><div class="home-heading"><h1>Knoop</h1><p>从自己的题库开始练习</p></div><div class="home-summary"><span>${summary.banks} 个题库</span><span>总内容 ${summary.totalContent} 项</span><span>可刷 ${summary.questions} 题</span><span>背诵材料 ${summary.memorization} 项</span></div><p class="home-count-help">总内容与背诵材料含斩杀、待返修；可刷题数按下方题型筛选。</p>
     <section class="home-group home-study"><h2 class="section-title">开始学习</h2><div class="stack">
       ${resume ? `<div class="home-resume">${button("继续上次学习", `resume:${resume.id}`, "primary")}<p class="home-session-summary">${esc(sessionSummary(resume))}</p></div>` : ""}
+      ${resume ? button("未完成学习列表","sessions") : ""}
       ${summary.banks ? button("开始新练习 · 选择范围", "scope", resume ? "" : "primary") : button("导入题库，开始学习", "import", resume ? "" : "primary")}
     </div></section>
     <div class="type-filter-row"><span>刷题题型</span><div class="type-filter-options">${filters}</div></div>
@@ -312,6 +318,17 @@ async function home() {
       <div class="grid">${button("题库 / 导入", "import")}${button("基础统计", "stats")}</div>
     </div></section></main>`;
   renderMath();
+}
+
+async function sessionsView():Promise<void>{
+  const sessions=await unfinishedSessions(),nodes=await getNodes(),titles=new Map(nodes.map(n=>[n.id,n.title]));
+  const present=new Set((await (await db()).select<{id:string}[]>("SELECT id FROM questions")).map(row=>row.id));
+  const cards=sessions.map(session=>{
+    const scope=JSON.parse(session.scope_json),ids=JSON.parse(session.question_ids_json) as string[],available=ids.filter(id=>present.has(id)).length;
+    const names=Array.isArray(scope.nodeIds)?scope.nodeIds.map((id:string)=>titles.get(id)??"失效范围").join("、"):session.mode==="wrong"?"当前错题":session.mode==="favorites"?"收藏":"已保存范围";
+    return `<section class="card"><h2>${esc(sessionSummary(session))}</h2><p>${esc(names)} · 更新 ${esc(formatUpdatedAt(session.updated_at))}</p>${available===ids.length?button("继续学习",`resume:${session.id}`,"primary"):`<p>范围内容已失效，请重新选择范围。现存 ${available} / ${ids.length} 项。</p>`}</section>`;
+  }).join("");
+  shell("未完成学习",cards||emptyState("暂无未完成学习","完成的会话和作答记录仍保留。",{text:"开始学习",id:"scope"}));
 }
 
 async function importView() {
@@ -614,13 +631,12 @@ async function startScope(mode:string,nodeIds:string[],count?:number) {
     if(mode==="random"){rows=shuffled(rows).slice(0,count??rows.length);order="random";}
   }
   if(!rows.length){ notify("此范围没有可用内容"); return; }
-  const id=await createSession(sessionMode,{nodeIds,order},rows.map(q=>q.id)); await navigate({ view: "session", id });
+  const id=await createSession(sessionMode,{nodeIds,order,types:mode.startsWith("memorization")?["memorization"]:[...enabledBrushTypes],count:order==="random"?count:undefined},rows.map(q=>q.id)); await navigate({ view: "session", id });
 }
 async function startRows(mode:string,rows:QuestionRow[]){ if(!rows.length)return; const id=await createSession(mode,{source:mode},rows.map(q=>q.id)); await navigate({ view: "session", id }); }
 
 function questionSearchText(q: QuestionInput): string {
-  const answer = Array.isArray(q.answer) ? q.answer.join(" ") : String(q.answer ?? "");
-  return [q.stem,q.front,q.back,q.prompt,q.content,q.explanation,answer,...(q.options??[]).map(o=>`${o.id} ${o.text}`),...(q.tags??[]),...(q.keyPoints??[])].filter(Boolean).join("\n").toLocaleLowerCase();
+  return searchText(q);
 }
 function directoryMatches(q: QuestionInput, query: string): boolean {
   const terms=query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean); if(!terms.length)return true;
@@ -640,9 +656,9 @@ function directoryMatchLocation(q:QuestionInput,query:string):string {
   ];
   return fields.find(([,value])=>terms.some(term=>value.toLocaleLowerCase().includes(term)))?.[0]??"";
 }
-function directoryListHtml(entries:Array<{row:QuestionRow;index:number}>,sessionId?:string,currentIndex=-1,query=""):string {
+function directoryListHtml(entries:Array<{row:QuestionRow;index:number;question?:QuestionInput}>,sessionId?:string,currentIndex=-1,query=""):string {
   if(!entries.length)return `${emptyState("没有匹配内容","试试其他关键词。")}`;
-  return entries.map(({row:r,index:i})=>{const q=parseQuestion(r), location=directoryMatchLocation(q,query);return `<button class="directory-item ${i===currentIndex?"current":""}" data-action="${sessionId?`jump-session:${i}`:`start-directory:${i}`}"><b>${i+1}</b><span class="type">${questionTypeLabel(q)}</span><span class="directory-copy"><span class="directory-text">${esc(questionLead(q))}</span>${location?`<small class="directory-match">命中${esc(location)}</small>`:""}</span></button>`}).join("");
+  return entries.map(({row:r,index:i,question})=>{const q=question??parseQuestion(r), location=directoryMatchLocation(q,query);return `<button class="directory-item ${i===currentIndex?"current":""}" data-action="${sessionId?`jump-session:${i}`:`start-directory:${i}`}"><b>${i+1}</b><span class="type">${questionTypeLabel(q)}</span><span class="directory-copy"><span class="directory-text">${esc(questionLead(q))}</span>${location?`<small class="directory-match">命中${esc(location)}</small>`:""}</span></button>`}).join("");
 }
 function directorySearchActionsHtml(route: Extract<Route,{view:"directory"}>, count:number):string {
   if(route.sessionId || !route.query?.trim() || !count)return "";
@@ -661,14 +677,15 @@ async function directoryView(route: Extract<Route,{view:"directory"}>) {
     title=route.kind==="memorization"?"背诵目录":"题目目录";
   }
   if(!rows.length){return shell(title,`${emptyState("没有可定位的内容","请重新选择学习范围。",{text:"去学习",id:"scope"})}`);}
-  const query=route.query??""; const entries=directoryEntries(rows,query);
-  shell(title,`<div class="directory-search"><input id="directory-search" type="search" placeholder="搜索题干、选项、答案、解析、标签" value="${esc(query)}"><span id="directory-search-count">${query.trim()?`找到 ${entries.length} / ${rows.length}`:`共 ${rows.length} 项`}</span></div><div id="directory-search-actions">${directorySearchActionsHtml(route,entries.length)}</div><div class="directory-jump"><input id="directory-index" type="number" min="1" max="${rows.length}" value="${Math.max(1,currentIndex+1)}" inputmode="numeric"><button data-action="directory-go">前往题号</button></div><div id="directory-list" class="directory-list">${directoryListHtml(entries,route.sessionId,currentIndex,query)}</div>`);
+  const query=route.query??"",index=indexDirectory(rows);let entries=searchDirectory(index,query),limit=100,timer=0,currentQuery=query;
+  shell(title,`<div class="directory-search"><input id="directory-search" type="search" placeholder="搜索题干、选项、答案、解析、标签" value="${esc(query)}"><span id="directory-search-count"></span></div><div id="directory-search-actions"></div><div class="directory-jump"><input id="directory-index" type="number" min="1" max="${rows.length}" value="${Math.max(1,currentIndex+1)}" inputmode="numeric"><button data-action="directory-go">前往题号</button></div><div id="directory-list" class="directory-list"></div><button id="directory-more" type="button">显示更多</button>`);
+  const list=document.querySelector<HTMLElement>("#directory-list")!,count=document.querySelector<HTMLElement>("#directory-search-count")!,actions=document.querySelector<HTMLElement>("#directory-search-actions")!,more=document.querySelector<HTMLButtonElement>("#directory-more")!;
+  const draw=()=>{list.innerHTML=directoryListHtml(entries.slice(0,limit),route.sessionId,currentIndex,currentQuery);list.inert=false;list.removeAttribute("aria-busy");renderMath(list);count.textContent=`${currentQuery.trim()?`找到 ${entries.length} / ${rows.length}`:`共 ${rows.length} 项`}${entries.length>limit?` · 已显示 ${limit}`:""}`;more.hidden=entries.length<=limit;actions.innerHTML=directorySearchActionsHtml({...route,query:currentQuery},entries.length);};
+  draw();more.onclick=()=>{limit+=100;draw();};
   const search=document.querySelector<HTMLInputElement>("#directory-search");
   search?.addEventListener("input",()=>{
-    const nextRoute={...route,query:search.value}; history.replaceState(nextRoute,"");
-    const nextEntries=directoryEntries(rows,search.value); const count=document.querySelector<HTMLElement>("#directory-search-count"); if(count)count.textContent=search.value.trim()?`找到 ${nextEntries.length} / ${rows.length}`:`共 ${rows.length} 项`;
-    const list=document.querySelector<HTMLElement>("#directory-list"); if(list){list.innerHTML=directoryListHtml(nextEntries,route.sessionId,currentIndex,search.value);renderMath(list);}
-    const actions=document.querySelector<HTMLElement>("#directory-search-actions"); if(actions)actions.innerHTML=directorySearchActionsHtml(nextRoute,nextEntries.length);
+    history.replaceState({...route,query:search.value},"");clearTimeout(timer);list.inert=true;list.setAttribute("aria-busy","true");actions.innerHTML="";more.hidden=true;count.textContent="正在搜索…";
+    timer=window.setTimeout(()=>{if(!search.isConnected)return;currentQuery=search.value;entries=searchDirectory(index,currentQuery);limit=100;draw();},180);
   });
 }
 
@@ -724,9 +741,10 @@ async function withStudyAction(task:()=>Promise<void>):Promise<void>{
   let release!:()=>void;
   studyDone=new Promise<void>(resolve=>release=resolve);
   const controls=[...app.querySelectorAll<HTMLButtonElement|HTMLInputElement>("button:not(:disabled),input:not(:disabled)")];
+  const focused=document.activeElement as HTMLElement|null;
   controls.forEach(control=>control.disabled=true);
   try{await flushDrafts();await task();}
-  finally{studyBusy=false;controls.forEach(control=>control.disabled=false);release();}
+  finally{studyBusy=false;controls.forEach(control=>control.disabled=false);if(focused?.isConnected&&!focused.matches(":disabled"))focused.focus({preventScroll:true});release();}
 }
 async function persistDraft(){
   if(!activeSession)return;
@@ -750,7 +768,27 @@ async function recordAnswer(questionId:string,answer:unknown,grading:string,corr
 }
 async function next(){return withStudyAction(advance);}
 async function advance(){if(!activeSession)return;const nextIndex=activeSession.current_index+1;await saveSession(activeSession.id,nextIndex,{quickMode},nextIndex>=activeRows.length);activeSession.current_index=nextIndex;activeSession.state_json=JSON.stringify({quickMode});selection.clear();excludedOptions.clear();blankValue="";pageState={};if(nextIndex>=activeRows.length)finishView();else await quizView();}
-function finishView(){shell("本轮完成",`<div class="empty finish-page"><div class="finish">✓</div><h2>完成了 ${activeRows.length} 项</h2><p>本轮学习已保存。</p>${button("查看当前错题","wrong")}${button("返回首页","home","primary")}</div>`,false);}
+function finishView(){shell("本轮完成",`<div class="empty finish-page"><div class="finish">✓</div><h2>完成了 ${activeRows.length} 项</h2><p>本轮学习已保存。</p>${activeSession?button("同范围再来一组",`repeat-session:${activeSession.id}`,"primary"):""}${button("查看当前错题","wrong")}${button("返回首页","home")}</div>`,false);}
+async function repeatRound(id:string):Promise<void>{
+  let created:string|undefined;
+  await withStudyAction(async()=>{
+    const session=await sessionById(id);if(!session?.completed_at)throw new Error("本轮尚未完成");
+    const scope=JSON.parse(session.scope_json),oldIds=JSON.parse(session.question_ids_json) as string[],oldRows=await getQuestions(oldIds);
+    const nodes=await getNodes(),nodeIds=Array.isArray(scope.ranges)?expandPresetRanges(scope.ranges,nodes,new Set((await getQuestions()).map(r=>r.node_id))):scope.nodeIds??[...new Set(oldRows.map(r=>r.node_id))];
+    let rows=session.mode==="wrong"?await wrongQuestions():session.mode==="favorites"?await favoriteQuestions():await questionsForScope(nodeIds);
+    const types=scope.types??(session.mode==="memorization"?["memorization"]:[...new Set(oldRows.map(r=>r.type))]);rows=rows.filter(row=>types.includes(row.type));
+    if(scope.searchQuery)rows=rows.filter(row=>directoryMatches(parseQuestion(row),scope.searchQuery));
+    const random=scope.order==="random"||session.mode==="random",count=scope.count??oldIds.length;
+    if(random)rows=shuffled(rows).slice(0,count);
+    if(!rows.length)throw new Error("原范围已失效或没有可用内容，请重新选择范围");
+    created=await createSession(session.mode,{...scope,nodeIds,types,order:random?"random":"sequential",count:random?count:undefined},rows.map(row=>row.id));
+  });
+  if(created)await navigate({view:"session",id:created});
+}
+function updateOptionStyles(selected:ReadonlySet<string>,excluded:ReadonlySet<string>=new Set(),prefix="option:"):void{
+  for(const el of app.querySelectorAll<HTMLButtonElement>(`.option[data-action^="${prefix}"]`)){const id=el.dataset.action!.slice(prefix.length);el.classList.toggle("selected",selected.has(id));el.classList.toggle("excluded",excluded.has(id));el.setAttribute("aria-pressed",String(selected.has(id)));}
+  const submit=app.querySelector<HTMLButtonElement>(`[data-action="${prefix==="option:"?"submit":"temp-submit"}"]`);if(submit)submit.disabled=!selected.size;
+}
 
 function bindOptionLongPress(){
   if(pageState.submitted||pageState.pendingManual)return;
@@ -758,7 +796,7 @@ function bindOptionLongPress(){
     let timer=0;
     const id=el.dataset.optionId!;
     const cancel=()=>{if(timer){clearTimeout(timer);timer=0;}};
-    el.addEventListener("pointerdown",()=>{ cancel(); timer=window.setTimeout(()=>{ timer=0;if(studyBusy||!el.isConnected||pageState.submitted||pageState.pendingManual)return; if(excludedOptions.has(id)) excludedOptions.delete(id); else {excludedOptions.add(id);selection.delete(id);} suppressOptionClickId=id;suppressOptionClickUntil=Date.now()+800;void persistDraft().then(()=>quizView()).catch(reportSaveError); },480); });
+    el.addEventListener("pointerdown",()=>{ cancel(); timer=window.setTimeout(()=>{ timer=0;if(studyBusy||!el.isConnected||pageState.submitted||pageState.pendingManual)return; if(excludedOptions.has(id)) excludedOptions.delete(id); else {excludedOptions.add(id);selection.delete(id);} suppressOptionClickId=id;suppressOptionClickUntil=Date.now()+800;updateOptionStyles(selection,excludedOptions);void persistDraft().catch(reportSaveError); },480); });
     el.addEventListener("pointerup",cancel); el.addEventListener("pointercancel",cancel); el.addEventListener("pointerleave",cancel);
     el.addEventListener("contextmenu",e=>e.preventDefault());
   }
@@ -984,6 +1022,7 @@ async function tempSessionView(id: string): Promise<void> {
     return;
   }
   const q = questions[index], state = tempState(group);
+  activeTempDraft={id,index,state,type:q.type};
   let content = `<div class="type">${q.type === "single_choice" ? "单选题" : q.type === "multiple_choice" ? "多选题" : "填空题"}</div><h2 class="stem">${esc(q.stem)}</h2>`;
   if (q.options) content += `<div class="options">${q.options.map(o => `<button class="option ${state.selection.includes(o.id) ? "selected" : ""} ${state.submitted ? (Array.isArray(q.answer) ? q.answer : [q.answer]).includes(o.id) ? "right" : state.selection.includes(o.id) ? "wrong" : "" : ""}" data-action="temp-option:${esc(o.id)}" ${state.submitted || state.pendingManual ? "disabled" : ""}><b>${esc(o.id)}</b><span>${esc(o.text)}</span></button>`).join("")}</div>`;
   if (q.type === "blank") content += `<input id="temp-blank" class="blank" placeholder="输入答案" value="${esc(state.blank)}" ${state.submitted || state.pendingManual ? "disabled" : ""}>`;
@@ -998,15 +1037,23 @@ async function tempSessionView(id: string): Promise<void> {
   if (blank) blank.oninput = () => {
     if(studyBusy)return;
     const value = blank.value;
+    state.blank=value;
     const submit = document.querySelector<HTMLButtonElement>('[data-action="temp-submit"]');
     if (submit) submit.disabled = !value.trim();
-    void enqueueDraft(`temp:${id}`,async()=>{const current=await getTempGroup(id);
-      if (current && current.current_index === index) {
-        const draft = tempState(current);
-        if (!draft.submitted && !draft.pendingManual) { draft.blank = value; return saveTempProgress(current,index,draft,tempResults(current)); }
-      }
-    }).catch(reportSaveError);
+    void persistTempDraft(id,index,state).catch(reportSaveError);
   };
+}
+let activeTempDraft:{id:string;index:number;state:TempState;type:string}|null=null;
+function persistTempDraft(id:string,index:number,state:TempState):Promise<void>{
+  const captured=structuredClone(state);
+  return enqueueDraft(`temp:${id}`,async()=>{const current=await getTempGroup(id);if(current&&current.current_index===index&&!current.completed_at){const saved=tempState(current);if(!saved.submitted&&!saved.pendingManual)await saveTempProgress(current,index,captured,tempResults(current));}});
+}
+function selectTempOption(option:string):void{
+  const draft=activeTempDraft,route=history.state as Route;if(!draft||route.view!=="temp-session"||route.id!==draft.id||draft.state.submitted||draft.state.pendingManual)return;
+  const el=app.querySelector<HTMLButtonElement>(`[data-action="temp-option:${CSS.escape(option)}"]`);if(!el)return;
+  const single=draft.type==="single_choice";
+  draft.state.selection=single?[option]:draft.state.selection.includes(option)?draft.state.selection.filter(id=>id!==option):[...draft.state.selection,option];
+  updateOptionStyles(new Set(draft.state.selection),new Set(),"temp-option:");void persistTempDraft(draft.id,draft.index,draft.state).catch(reportSaveError);
 }
 
 async function saveAiTempGroup(): Promise<void> {
@@ -1361,6 +1408,8 @@ app.addEventListener("click",async e=>{const target=(e.target as HTMLElement).cl
     if(action==="home")return await navigate({view:"home"});
     if(action==="import")return navigate({view:"import"});
     if(action==="backup")return navigate({view:"backup"});
+    if(action==="sessions")return navigate({view:"sessions"});
+    if(action.startsWith("repeat-session:"))return await repeatRound(action.slice("repeat-session:".length));
     if(action.startsWith("confirm-import:"))return await withStudyAction(()=>confirmImport(Number(action.slice("confirm-import:".length))));
     if(action.startsWith("cancel-import:")){importQueue=importQueue.filter(entry=>entry.id!==Number(action.slice("cancel-import:".length)));return importView();}
     if(action==="backup-export")return await backupAction(async()=>{requireBackupIdle();const backup=await buildBackup();await saveJsonFile(`knoop-backup-${new Date().toISOString().slice(0,10)}.json`,backup,"Knoop 完整学习备份");});
@@ -1422,7 +1471,8 @@ app.addEventListener("click",async e=>{const target=(e.target as HTMLElement).cl
     if(action.startsWith("start-directory:")){const index=Number(action.slice("start-directory:".length));const route=history.state as Route;if(route.view!=="directory"||route.sessionId)return;const all=await questionsForScope(route.nodeIds??[]);const rows=route.kind==="memorization"?all.filter(q=>q.type==="memorization"):all.filter(isEnabledBrush);if(!rows.length||!Number.isInteger(index)||index<0||index>=rows.length)return;const mode=route.kind==="memorization"?"memorization":"sequential";const id=await createSession(mode,{nodeIds:route.nodeIds??[],order:"direct"},rows.map(r=>r.id),index);return navigate({view:"session",id});}
     if(action.startsWith("jump-session:")){const route=history.state as Route;const sessionId=route.view==="directory"&&route.sessionId?route.sessionId:activeSession?.id;if(!sessionId)return;const session=await sessionById(sessionId);if(!session)return;const ids=JSON.parse(session.question_ids_json) as string[];const index=Number(action.slice("jump-session:".length));if(!Number.isInteger(index)||index<0||index>=ids.length)return;const saved=JSON.parse(session.state_json||"{}") as {quickMode?:boolean};quickMode=!!saved.quickMode;const found=await getQuestions(ids);const byId=new Map(found.map(r=>[r.id,r]));activeRows=ids.map(id=>byId.get(id)).filter(Boolean) as QuestionRow[];selection.clear();excludedOptions.clear();blankValue="";pageState={};await saveSession(session.id,index,{quickMode});session.current_index=index;activeSession=session;return navigate({view:"session",id:session.id});}
     if(action.startsWith("delete-bank:")){const bankId=action.slice("delete-bank:".length);const bank=(await getBanks()).find(b=>b.id===bankId);if(!confirm(`删除题库“${bank?.title??bankId}”？\n\n该题库的题目、作答记录、收藏、审核、笔记和相关未完成进度都会一并删除。此操作不可撤销。`))return;const btn=target as HTMLButtonElement;const oldText=btn.textContent;btn.disabled=true;btn.textContent="删除中…";try{await deleteBank(bankId);notify("已删除题库","ok");return importView();}catch(err){btn.disabled=false;btn.textContent=oldText;throw err;}}
-    if(action.startsWith("temp-option:")||action==="temp-submit"||action.startsWith("temp-manual:")||action==="temp-next")return await withStudyAction(()=>tempAction(action));
+    if(action.startsWith("temp-option:")){selectTempOption(action.slice(12));return;}
+    if(action==="temp-submit"||action.startsWith("temp-manual:")||action==="temp-next")return await withStudyAction(()=>tempAction(action));
     if(action==="toggle-quick"){quickMode=!quickMode;await persistDraft();return quizView();}
     if(action.startsWith("option:")&&!pageState.submitted){
       const id=action.slice(7); if(id===suppressOptionClickId&&Date.now()<suppressOptionClickUntil)return; const q=parseQuestion(activeRows[activeSession!.current_index]); excludedOptions.delete(id);
@@ -1431,7 +1481,7 @@ app.addEventListener("click",async e=>{const target=(e.target as HTMLElement).cl
       } else if(q.type==="multiple_choice") {
         selection.has(id)?selection.delete(id):selection.add(id);
       }
-      await persistDraft();return quizView();
+      updateOptionStyles(selection,excludedOptions);void persistDraft().catch(reportSaveError);return;
     }
     if(action==="submit")return await submit();
     if(action.startsWith("manual:")){const ok=action.endsWith("true");return await record(activeRows[activeSession!.current_index].id,blankValue,"manual",ok);}
