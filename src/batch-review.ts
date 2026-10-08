@@ -1,4 +1,5 @@
-import { db } from "./db";
+import { db, atomicWrite } from "./db";
+import { prepareTempGroup } from "./temp-review";
 import type { BankFile, ErrorReviewFile } from "./types";
 
 export const SOURCES_PER_BATCH = 2;
@@ -51,6 +52,24 @@ export async function saveBatchJob(job: BatchJob, batches: ReviewBatch[]): Promi
 }
 export async function deleteBatchJob(id: string): Promise<void> {
   await (await db()).execute("DELETE FROM ai_review_batch_jobs WHERE id=$1",[id]);
+}
+export async function saveReadyBatchCandidates(id: string): Promise<string | null> {
+  const job=await getBatchJob(id); if(!job)return null;
+  const batches=jobBatches(job), collected=collectReadyCandidates(job,batches);
+  if(!collected.bank.questions.length)return batches.find(batch=>batch.savedGroupId)?.savedGroupId??null;
+  const query=`SELECT external_id FROM questions WHERE external_id IN (${collected.bank.questions.map((_,i)=>`$${i+1}`).join(",")})`;
+  const ids=collected.bank.questions.map(q=>q.id);
+  if((await (await db()).select<unknown[]>(query,ids)).length)throw new Error("有候选题 ID 已进入正式题库，请重新生成冲突批次");
+  const count=new Set(collected.metadata.map(x=>x.derivedFrom)).size;
+  const prepared=prepareTempGroup(collected.bank,"batch",`批量回炉 · ${count} 道原题`,job.model,new Date().toISOString(),collected.metadata);
+  for(const index of collected.batchIndexes)batches[index].savedGroupId=prepared.id;
+  await atomicWrite([
+    {sql:"SELECT batches_json FROM ai_review_batch_jobs WHERE id=$1",params:[id],expectedRows:[{batches_json:job.batches_json}]},
+    {sql:query,params:ids,expectedRows:[]},
+    prepared.step,
+    {sql:"UPDATE ai_review_batch_jobs SET batches_json=$2,updated_at=$3 WHERE id=$1",params:[id,JSON.stringify(batches),new Date().toISOString()],affectedRows:1}
+  ]);
+  return prepared.id;
 }
 export function candidateFingerprint(question: BankFile["questions"][number]): string {
   return JSON.stringify({

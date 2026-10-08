@@ -12,7 +12,8 @@
     "test:ai": "node scripts/test-ai-review.mjs",
     "test:temp": "node scripts/test-temp-review.mjs",
     "test:batch": "node scripts/test-batch-review.mjs",
-    "test:review-a": "node scripts/test-review-a.mjs"
+    "test:review-a": "node scripts/test-review-a.mjs",
+    "test:review-b": "node scripts/test-review-b.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.8.0",

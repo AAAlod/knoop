@@ -13,13 +13,16 @@ const database = {
     if (sql.startsWith("INSERT INTO ai_review_groups")) {
       rows.set(params[0], {id:params[0],source_question_id:params[1],source_question_title:params[2],model:params[3],generated_at:params[4],created_at:params[5],updated_at:params[5],bank_json:params[6],question_meta_json:params[7],current_index:0,state_json:params[8],results_json:"[]",completed_at:null});
     } else if (sql.startsWith("UPDATE ai_review_groups")) {
-      const row=rows.get(params[0]); Object.assign(row,{current_index:params[1],state_json:params[2],results_json:params[3],updated_at:params[4],completed_at:params[5] ? params[4] : null});
+      const row=rows.get(params[0]);
+      if(!row||row.current_index!==params[6]||row.state_json!==params[7]||row.results_json!==params[8])return {rowsAffected:0};
+      Object.assign(row,{current_index:params[1],state_json:params[2],results_json:params[3],updated_at:params[4],completed_at:params[5] ? params[4] : null});
     } else if (sql.startsWith("DELETE FROM ai_review_groups")) rows.delete(params[0]);
     else throw Error("Unexpected write: "+sql);
+    return {rowsAffected:1};
   },
   async select(sql, params) {
-    if (sql.includes("WHERE id=$1")) return rows.has(params[0]) ? [rows.get(params[0])] : [];
-    return [...rows.values()];
+    if (sql.includes("WHERE id=$1")) return rows.has(params[0]) ? [structuredClone(rows.get(params[0]))] : [];
+    return structuredClone([...rows.values()]);
   }
 };
 globalThis.__knoopTestDb = database;

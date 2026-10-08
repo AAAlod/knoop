@@ -11,7 +11,7 @@ import { execFileSync } from 'node:child_process';
 const baseline = process.argv.includes('--baseline');
 const ui = process.argv.includes('--ui');
 const source = path => baseline
-  ? Promise.resolve(execFileSync('git', ['-c', `safe.directory=${process.cwd().replaceAll('\\', '/')}`, 'show', `HEAD:${path}`], { encoding: 'utf8' }))
+  ? Promise.resolve(execFileSync('git', ['-c', `safe.directory=${process.cwd().replaceAll('\\', '/')}`, 'show', `e6a568b:${path}`], { encoding: 'utf8' }))
   : readFile(path, 'utf8');
 const sqlite = new DatabaseSync(':memory:');
 const writes = [];
@@ -23,6 +23,16 @@ const adapter = {
   },
   async select(sql, params = []) {
     return sqlite.prepare(sql).all(...(params.length ? [bindings(params)] : [])).map(row => ({ ...row }));
+  },
+  async atomic(steps) {
+    sqlite.exec('BEGIN');
+    try {
+      for(const step of steps){
+        if(step.expectedRows!==undefined)assert.deepEqual(await adapter.select(step.sql,step.params),step.expectedRows);
+        else {const result=await adapter.execute(step.sql,step.params);if(step.affectedRows!==undefined)assert.equal(result.rowsAffected,step.affectedRows);}
+      }
+      sqlite.exec('COMMIT');
+    }catch(error){sqlite.exec('ROLLBACK');throw error;}
   }
 };
 function bindings(params) { return Object.fromEntries(params.map((p, i) => [`$${i + 1}`, p])); }
@@ -32,6 +42,8 @@ const sqlPlugin = (browser = false) => ({
   setup(builder) {
     if (baseline) builder.onLoad({ filter: /[\\/]src[\\/]db\.ts$/ }, async () => ({ contents: await source('src/db.ts'), loader: 'ts' }));
     builder.onResolve({ filter: /^@tauri-apps\/plugin-sql$/ }, () => ({ path: 'sql', namespace: 'test' }));
+    builder.onResolve({ filter: /^@tauri-apps\/api\/core$/ }, () => ({ path: 'core', namespace: 'test-core' }));
+    builder.onLoad({ filter: /.*/, namespace: 'test-core' }, () => ({contents:`export async function invoke(command,args){if(command!=="atomic_write")throw Error("Native API forbidden in review A tests");return ${browser?'window.__atomic(args.steps)':'globalThis.__knoopTestDb.atomic(args.steps)'};}`,loader:'js'}));
     builder.onLoad({ filter: /.*/, namespace: 'test' }, () => ({
       contents: browser
         ? 'export default {load:async()=>({execute:(sql,p)=>window.__sql("execute",sql,p),select:(sql,p)=>window.__sql("select",sql,p)})};'
@@ -127,6 +139,7 @@ if (ui) {
   context.setDefaultTimeout(8000);
   await context.addInitScript(() => history.replaceState({ view: 'home' }, ''));
   await context.exposeBinding('__sql', async (_source, op, sql, params) => adapter[op](sql, params));
+  await context.exposeBinding('__atomic', async (_source, steps) => adapter.atomic(steps));
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));

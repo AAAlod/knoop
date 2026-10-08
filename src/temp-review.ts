@@ -1,4 +1,4 @@
-import { db } from "./db";
+import { db, type AtomicStep } from "./db";
 import type { BankFile } from "./types";
 
 export interface TempAnswer {
@@ -37,13 +37,14 @@ export async function createTempGroup(bank: BankFile, sourceId: string, sourceTi
   return createTempGroupWithMetadata(bank,sourceId,sourceTitle,model,generatedAt,bank.questions.map(q => ({questionId:q.id,derivedFrom:sourceId,generatedAt,model})));
 }
 export async function createTempGroupWithMetadata(bank: BankFile, sourceId: string, sourceTitle: string, model: string, generatedAt: string, metadata: Array<{questionId:string;derivedFrom:string;generatedAt:string;model:string}>): Promise<string> {
+  const prepared = prepareTempGroup(bank,sourceId,sourceTitle,model,generatedAt,metadata);
+  await (await db()).execute(prepared.step.sql,prepared.step.params);
+  return prepared.id;
+}
+export function prepareTempGroup(bank: BankFile, sourceId: string, sourceTitle: string, model: string, generatedAt: string, metadata: Array<{questionId:string;derivedFrom:string;generatedAt:string;model:string}>): {id:string;step:AtomicStep} {
   if (!bank.questions.length || metadata.length !== bank.questions.length || metadata.some((item,index)=>item.questionId!==bank.questions[index].id)) throw new Error("临时题组来源信息不完整");
   const id = crypto.randomUUID(), stamp = new Date().toISOString();
-  await (await db()).execute(
-    "INSERT INTO ai_review_groups(id,source_question_id,source_question_title,model,generated_at,created_at,updated_at,bank_json,question_meta_json,current_index,state_json,results_json) VALUES($1,$2,$3,$4,$5,$6,$6,$7,$8,0,$9,'[]')",
-    [id,sourceId,sourceTitle,model,generatedAt,stamp,JSON.stringify(bank),JSON.stringify(metadata),JSON.stringify(emptyTempState())]
-  );
-  return id;
+  return {id,step:{sql:"INSERT INTO ai_review_groups(id,source_question_id,source_question_title,model,generated_at,created_at,updated_at,bank_json,question_meta_json,current_index,state_json,results_json) VALUES($1,$2,$3,$4,$5,$6,$6,$7,$8,0,$9,'[]')",params:[id,sourceId,sourceTitle,model,generatedAt,stamp,JSON.stringify(bank),JSON.stringify(metadata),JSON.stringify(emptyTempState())]}};
 }
 export async function listTempGroups(): Promise<TempGroup[]> {
   return (await db()).select<TempGroup[]>("SELECT * FROM ai_review_groups ORDER BY updated_at DESC");
@@ -54,10 +55,11 @@ export async function getTempGroup(id: string): Promise<TempGroup | null> {
 }
 export async function saveTempProgress(group: TempGroup, index: number, state: TempState, results: TempAnswer[], complete = false): Promise<void> {
   const stamp = new Date().toISOString();
-  await (await db()).execute(
-    "UPDATE ai_review_groups SET current_index=$2,state_json=$3,results_json=$4,updated_at=$5,completed_at=CASE WHEN $6=1 THEN $5 ELSE NULL END WHERE id=$1",
-    [group.id,index,JSON.stringify(state),JSON.stringify(results),stamp,complete ? 1 : 0]
+  const result = await (await db()).execute(
+    "UPDATE ai_review_groups SET current_index=$2,state_json=$3,results_json=$4,updated_at=$5,completed_at=CASE WHEN $6=1 THEN $5 ELSE NULL END WHERE id=$1 AND current_index=$7 AND state_json=$8 AND results_json=$9",
+    [group.id,index,JSON.stringify(state),JSON.stringify(results),stamp,complete ? 1 : 0,group.current_index,group.state_json,group.results_json]
   );
+  if(result.rowsAffected !== 1)throw new Error("临时进度已变化，请重新打开题组");
 }
 export async function restartTempGroup(group: TempGroup): Promise<void> { await saveTempProgress(group,0,emptyTempState(),[]); }
 export async function deleteTempGroup(id: string): Promise<void> { await (await db()).execute("DELETE FROM ai_review_groups WHERE id=$1", [id]); }

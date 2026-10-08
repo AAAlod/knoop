@@ -1,15 +1,21 @@
 import Database from "@tauri-apps/plugin-sql";
+import { invoke } from "@tauri-apps/api/core";
 import type { BankBundleFile, BankFile, BankRow, ErrorReviewFile, NodeRow, QuestionInput, QuestionRow, RepairReviewFile, ReviewIssue, ReviewRow, SessionRow } from "./types";
 import { parseQuestion } from "./types";
 
 let connection: Database | null = null;
+let initializing: Promise<Database> | null = null;
 const now = () => new Date().toISOString();
 const bankKeyPrefix = (bankId: string) => `${bankId.length}:${bankId}::`;
 const key = (bankId: string, externalId: string) => `${bankKeyPrefix(bankId)}${externalId}`;
 
 export async function db(): Promise<Database> {
   if (connection) return connection;
-  connection = await Database.load("sqlite:knoop.db");
+  if (!initializing) initializing = initialize().catch(error => { initializing = null; throw error; });
+  return initializing;
+}
+async function initialize(): Promise<Database> {
+  const loaded = await Database.load("sqlite:knoop.db");
   const schema = [
     "PRAGMA foreign_keys = ON",
     `CREATE TABLE IF NOT EXISTS banks (id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
@@ -17,6 +23,7 @@ export async function db(): Promise<Database> {
     `CREATE TABLE IF NOT EXISTS questions (id TEXT PRIMARY KEY, external_id TEXT NOT NULL, bank_id TEXT NOT NULL, node_id TEXT NOT NULL, type TEXT NOT NULL, sort_order INTEGER NOT NULL, content_json TEXT NOT NULL, tags_json TEXT NOT NULL DEFAULT '[]', source_json TEXT, UNIQUE(bank_id, external_id))`,
     `CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, mode TEXT NOT NULL, scope_json TEXT NOT NULL, question_ids_json TEXT NOT NULL, current_index INTEGER NOT NULL DEFAULT 0, state_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT)`,
     `CREATE TABLE IF NOT EXISTS attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, question_id TEXT NOT NULL, session_id TEXT NOT NULL, user_answer TEXT NOT NULL, grading_mode TEXT NOT NULL, is_correct INTEGER NOT NULL, answered_at TEXT NOT NULL)`,
+    `CREATE TABLE IF NOT EXISTS question_answer_revisions (id INTEGER PRIMARY KEY AUTOINCREMENT, question_id TEXT NOT NULL, last_attempt_id INTEGER NOT NULL, previous_content_json TEXT NOT NULL, updated_content_json TEXT NOT NULL, changed_at TEXT NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS favorites (question_id TEXT PRIMARY KEY, created_at TEXT NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS killed_questions (question_id TEXT PRIMARY KEY, created_at TEXT NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS notes (question_id TEXT PRIMARY KEY, content TEXT NOT NULL, updated_at TEXT NOT NULL)`,
@@ -24,10 +31,44 @@ export async function db(): Promise<Database> {
     `CREATE TABLE IF NOT EXISTS ai_review_batch_jobs (id TEXT PRIMARY KEY, model TEXT NOT NULL, review_json TEXT NOT NULL, batches_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS ai_review_groups (id TEXT PRIMARY KEY, source_question_id TEXT NOT NULL, source_question_title TEXT NOT NULL, model TEXT NOT NULL, generated_at TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, bank_json TEXT NOT NULL, question_meta_json TEXT NOT NULL, current_index INTEGER NOT NULL DEFAULT 0, state_json TEXT NOT NULL DEFAULT '{}', results_json TEXT NOT NULL DEFAULT '[]', completed_at TEXT)`,
     "CREATE INDEX IF NOT EXISTS idx_questions_node ON questions(node_id)",
-    "CREATE INDEX IF NOT EXISTS idx_attempts_question ON attempts(question_id, id DESC)"
+    "CREATE INDEX IF NOT EXISTS idx_attempts_question ON attempts(question_id, id DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_answer_revisions_question ON question_answer_revisions(question_id,last_attempt_id)"
   ];
-  for (const sql of schema) await connection.execute(sql);
+  for (const sql of schema) await loaded.execute(sql);
+  connection = loaded;
   return connection;
+}
+
+export interface AtomicStep { sql: string; params?: unknown[]; expectedRows?: unknown[]; affectedRows?: number }
+export async function atomicWrite(steps: AtomicStep[]): Promise<void> {
+  await db();
+  await invoke("atomic_write", {steps});
+}
+type WriteConnection = Pick<Database,"select"|"execute">;
+// Plan using existing business rules; recheck every read inside the native transaction.
+async function withAtomicWrite<T>(plan: (conn: WriteConnection) => Promise<T>): Promise<T> {
+  const real = await db(), steps: AtomicStep[] = [];
+  const conn: WriteConnection = {
+    async select<T>(sql: string, params: unknown[] = []): Promise<T> {
+      const rows = await real.select<T>(sql,params);
+      steps.push({sql,params,expectedRows: rows as unknown[]});
+      return rows;
+    },
+    async execute(sql: string, params: unknown[] = []) {
+      steps.push({sql,params});
+      return {rowsAffected:0,lastInsertId:0};
+    }
+  };
+  const result = await plan(conn);
+  await atomicWrite(steps);
+  return result;
+}
+function answerIdentity(q: QuestionInput): string {
+  return canonicalJson({type:q.type,answer:Array.isArray(q.answer)?[...q.answer].sort():q.answer,back:q.back,content:q.content});
+}
+async function reviseAnswer(conn: WriteConnection, id: string, previous: string, updated: QuestionInput): Promise<void> {
+  if (answerIdentity(JSON.parse(previous) as QuestionInput) === answerIdentity(updated)) return;
+  await conn.execute("INSERT INTO question_answer_revisions(question_id,last_attempt_id,previous_content_json,updated_content_json,changed_at) SELECT $1,COALESCE(MAX(id),0),$2,$3,$4 FROM attempts WHERE question_id=$1",[id,previous,JSON.stringify(updated),now()]);
 }
 
 function assertText(value: unknown, name: string): asserts value is string {
@@ -132,14 +173,15 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
-async function finishReviewOnConnection(conn: Database, review: ReviewRow): Promise<void> {
+async function finishReviewOnConnection(conn: WriteConnection, review: ReviewRow): Promise<void> {
+  // Repair retires the old result from current-wrong decisions, preserving its grading.
+  await conn.execute("INSERT INTO question_answer_revisions(question_id,last_attempt_id,previous_content_json,updated_content_json,changed_at) SELECT q.id,COALESCE((SELECT MAX(id) FROM attempts WHERE question_id=q.id),0),$2,q.content_json,$3 FROM questions q WHERE q.id=$1",[review.question_id,review.question_snapshot_json,now()]);
   await conn.execute("DELETE FROM question_reviews WHERE question_id=$1", [review.question_id]);
   if (!review.was_killed_before) await conn.execute("DELETE FROM killed_questions WHERE question_id=$1", [review.question_id]);
-  await conn.execute("DELETE FROM attempts WHERE question_id=$1", [review.question_id]);
 }
 
 export async function importBank(file: BankFile): Promise<{ repaired: number }> {
-  const conn = await db();
+  return withAtomicWrite(async conn => {
   const existing = await conn.select<BankRow[]>("SELECT id, title FROM banks WHERE id = $1", [file.import.bankId]);
   if (file.import.mode === "new" && existing.length) throw new Error(`题库 ${file.import.bankId} 已存在`);
   if (file.import.mode === "merge" && !existing.length) throw new Error(`要合并的题库 ${file.import.bankId} 不存在`);
@@ -158,6 +200,8 @@ export async function importBank(file: BankFile): Promise<{ repaired: number }> 
     ? await conn.select<ReviewRow[]>("SELECT r.* FROM question_reviews r JOIN questions q ON q.id=r.question_id WHERE q.bank_id=$1", [file.import.bankId])
     : [];
   const reviewByQuestionId = new Map(reviewedRows.map(r => [r.question_id, r]));
+  const localQuestions = await conn.select<QuestionRow[]>("SELECT * FROM questions WHERE bank_id=$1 ORDER BY id",[file.import.bankId]);
+  const previousById = new Map(localQuestions.map(q => [q.id,q.content_json]));
   const stamp = now();
   await conn.execute("INSERT INTO banks(id,title,created_at,updated_at) VALUES($1,$2,$3,$3) ON CONFLICT(id) DO UPDATE SET title=$2,updated_at=$3", [file.import.bankId, file.import.bankTitle, stamp]);
   for (const n of file.nodes) await conn.execute(
@@ -168,6 +212,8 @@ export async function importBank(file: BankFile): Promise<{ repaired: number }> 
   for (const q of file.questions) {
     const questionId = key(file.import.bankId, q.id);
     const contentJson = JSON.stringify(q);
+    const previous = previousById.get(questionId);
+    if (previous) await reviseAnswer(conn,questionId,previous,q);
     await conn.execute(
       "INSERT INTO questions(id,external_id,bank_id,node_id,type,sort_order,content_json,tags_json,source_json) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(id) DO UPDATE SET node_id=$4,type=$5,sort_order=$6,content_json=$7,tags_json=$8,source_json=$9",
       [questionId, q.id, file.import.bankId, key(file.import.bankId, q.nodeId), q.type, q.order, contentJson, JSON.stringify(q.tags ?? []), q.source === undefined ? null : JSON.stringify(q.source)]
@@ -179,6 +225,7 @@ export async function importBank(file: BankFile): Promise<{ repaired: number }> 
     }
   }
   return { repaired };
+  });
 }
 
 export async function getBanks() { return (await db()).select<BankRow[]>("SELECT id,title,created_at,updated_at FROM banks ORDER BY created_at"); }
@@ -218,19 +265,21 @@ export async function questionsForScope(nodeIds: string[]) {
 }
 
 export async function updateQuestionContent(questionId: string, content: QuestionInput): Promise<void> {
-  const conn = await db();
+  return withAtomicWrite(async conn => {
   const rows = await conn.select<QuestionRow[]>("SELECT * FROM questions WHERE id=$1", [questionId]);
   const row = rows[0];
   if (!row) throw new Error("题目不存在");
   const existing = JSON.parse(row.content_json) as QuestionInput;
   if (content.id !== existing.id || content.nodeId !== existing.nodeId || content.type !== existing.type) throw new Error("编辑不能修改题目 ID、所属节点或题型");
+  await reviseAnswer(conn,questionId,row.content_json,content);
   await conn.execute("UPDATE questions SET content_json=$2,tags_json=$3,source_json=$4 WHERE id=$1", [questionId, JSON.stringify(content), JSON.stringify(content.tags ?? []), content.source === undefined ? null : JSON.stringify(content.source)]);
   await conn.execute("UPDATE banks SET updated_at=$2 WHERE id=$1", [row.bank_id, now()]);
+  });
 }
 
 export async function deleteBank(bankId: string): Promise<void> {
-  const conn = await db();
   const steps: Array<[string, unknown[]]> = [
+    ["DELETE FROM question_answer_revisions WHERE question_id IN (SELECT id FROM questions WHERE bank_id=$1)", [bankId]],
     ["DELETE FROM question_reviews WHERE question_id IN (SELECT id FROM questions WHERE bank_id=$1)", [bankId]],
     ["DELETE FROM killed_questions WHERE question_id IN (SELECT id FROM questions WHERE bank_id=$1)", [bankId]],
     ["DELETE FROM notes WHERE question_id IN (SELECT id FROM questions WHERE bank_id=$1)", [bankId]],
@@ -242,7 +291,7 @@ export async function deleteBank(bankId: string): Promise<void> {
     ["DELETE FROM banks WHERE id=$1", [bankId]]
   ];
   try {
-    for (const [sql, params] of steps) await conn.execute(sql, params);
+    await atomicWrite(steps.map(([sql,params])=>({sql,params})));
   } catch (error) {
     const text = error instanceof Error ? error.message : String(error);
     if (/database is locked|database is busy|SQLITE_BUSY/i.test(text)) {
@@ -262,6 +311,17 @@ export async function latestSession() { const rows = await (await db()).select<S
 export async function sessionById(id: string) { const rows = await (await db()).select<SessionRow[]>("SELECT * FROM sessions WHERE id=$1", [id]); return rows[0] ?? null; }
 export async function saveSession(id: string, index: number, state: unknown, complete = false) { const stamp = now(); await (await db()).execute("UPDATE sessions SET current_index=$2,state_json=$3,updated_at=$4,completed_at=CASE WHEN $5=1 THEN $4 ELSE completed_at END WHERE id=$1", [id,index,JSON.stringify(state),stamp,complete ? 1 : 0]); }
 export async function addAttempt(questionId: string, sessionId: string, answer: unknown, gradingMode: string, correct: boolean) { await (await db()).execute("INSERT INTO attempts(question_id,session_id,user_answer,grading_mode,is_correct,answered_at) VALUES($1,$2,$3,$4,$5,$6)", [questionId,sessionId,JSON.stringify(answer),gradingMode,correct ? 1 : 0,now()]); }
+export async function saveSessionDraft(id: string, index: number, state: unknown): Promise<void> {
+  const result = await (await db()).execute("UPDATE sessions SET state_json=$3,updated_at=$4 WHERE id=$1 AND current_index=$2 AND completed_at IS NULL",[id,index,JSON.stringify(state),now()]);
+  if (result.rowsAffected !== 1) throw new Error("学习进度已变化，请重新打开本轮练习");
+}
+export async function recordSessionAnswer(session: SessionRow, questionId: string, answer: unknown, grading: string, correct: boolean, state: unknown): Promise<void> {
+  await atomicWrite([
+    {sql:"SELECT current_index,state_json,completed_at FROM sessions WHERE id=$1",params:[session.id],expectedRows:[{current_index:session.current_index,state_json:session.state_json,completed_at:session.completed_at}]},
+    {sql:"INSERT INTO attempts(question_id,session_id,user_answer,grading_mode,is_correct,answered_at) VALUES($1,$2,$3,$4,$5,$6)",params:[questionId,session.id,JSON.stringify(answer),grading,correct?1:0,now()]},
+    {sql:"UPDATE sessions SET state_json=$2,updated_at=$3 WHERE id=$1",params:[session.id,JSON.stringify(state),now()],affectedRows:1}
+  ]);
+}
 export async function isFavorite(questionId: string) { const rows = await (await db()).select<{n:number}[]>("SELECT COUNT(*) n FROM favorites WHERE question_id=$1", [questionId]); return rows[0].n > 0; }
 export async function toggleFavorite(questionId: string) { const conn = await db(); if (await isFavorite(questionId)) await conn.execute("DELETE FROM favorites WHERE question_id=$1", [questionId]); else await conn.execute("INSERT INTO favorites(question_id,created_at) VALUES($1,$2)", [questionId,now()]); return isFavorite(questionId); }
 
@@ -299,6 +359,7 @@ export async function wrongQuestions() {
       AND q.id NOT IN (SELECT question_id FROM question_reviews)
       AND a.id=(SELECT a2.id FROM attempts a2 WHERE a2.question_id=q.id ORDER BY a2.id DESC LIMIT 1)
       AND a.is_correct=0
+      AND a.id>COALESCE((SELECT MAX(last_attempt_id) FROM question_answer_revisions WHERE question_id=q.id),0)
     ORDER BY a.answered_at DESC
   `);
 }
@@ -306,7 +367,7 @@ export async function favoriteQuestions() { return (await db()).select<QuestionR
 export async function stats() {
   const conn = await db();
   const a = (await conn.select<{total:number;correct:number}[]>("SELECT COUNT(*) total, COALESCE(SUM(a.is_correct),0) correct FROM attempts a WHERE a.question_id NOT IN (SELECT question_id FROM question_reviews)"))[0];
-  const w = (await conn.select<{n:number}[]>("SELECT COUNT(*) n FROM questions q JOIN attempts a ON a.question_id=q.id WHERE q.id NOT IN (SELECT question_id FROM killed_questions) AND q.id NOT IN (SELECT question_id FROM question_reviews) AND a.id=(SELECT a2.id FROM attempts a2 WHERE a2.question_id=q.id ORDER BY a2.id DESC LIMIT 1) AND a.is_correct=0"))[0].n;
+  const w = (await conn.select<{n:number}[]>("SELECT COUNT(*) n FROM questions q JOIN attempts a ON a.question_id=q.id WHERE q.id NOT IN (SELECT question_id FROM killed_questions) AND q.id NOT IN (SELECT question_id FROM question_reviews) AND a.id=(SELECT a2.id FROM attempts a2 WHERE a2.question_id=q.id ORDER BY a2.id DESC LIMIT 1) AND a.is_correct=0 AND a.id>COALESCE((SELECT MAX(last_attempt_id) FROM question_answer_revisions WHERE question_id=q.id),0)"))[0].n;
   return {total:a.total,correct:a.correct,wrong:a.total-a.correct,rate:a.total ? Math.round(a.correct/a.total*100) : 0,currentWrong:w};
 }
 
@@ -318,7 +379,7 @@ export async function getReview(questionId: string): Promise<ReviewRow | null> {
 }
 export async function isReviewed(questionId: string): Promise<boolean> { return (await getReview(questionId)) !== null; }
 export async function saveReview(questionId: string, issues: ReviewIssue[], note: string, refreshSnapshot = false): Promise<void> {
-  const conn = await db();
+  return withAtomicWrite(async conn => {
   const cleanIssues = [...new Set(issues.filter(x => reviewIssues.has(x)))];
   const cleanNote = note.trim();
   if (!cleanIssues.length && !cleanNote) throw new Error("请选择问题位置或填写审核意见");
@@ -334,23 +395,26 @@ export async function saveReview(questionId: string, issues: ReviewIssue[], note
         ? [questionId, JSON.stringify(cleanIssues), cleanNote, q.content_json, stamp]
         : [questionId, JSON.stringify(cleanIssues), cleanNote, stamp]);
   } else {
-    const killed = await isKilled(questionId);
+    const killed = (await conn.select<{n:number}[]>("SELECT COUNT(*) n FROM killed_questions WHERE question_id=$1",[questionId]))[0].n > 0;
     await conn.execute("INSERT INTO question_reviews(question_id,issues_json,note,question_snapshot_json,was_killed_before,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$6)", [questionId, JSON.stringify(cleanIssues), cleanNote, q.content_json, killed ? 1 : 0, stamp]);
     if (!killed) await conn.execute("INSERT OR IGNORE INTO killed_questions(question_id,created_at) VALUES($1,$2)", [questionId, stamp]);
   }
+  });
 }
 export async function cancelReview(questionId: string): Promise<void> {
-  const conn = await db();
+  return withAtomicWrite(async conn => {
   const review = (await conn.select<ReviewRow[]>("SELECT * FROM question_reviews WHERE question_id=$1", [questionId]))[0];
   if (!review) return;
   await conn.execute("DELETE FROM question_reviews WHERE question_id=$1", [questionId]);
   if (!review.was_killed_before) await conn.execute("DELETE FROM killed_questions WHERE question_id=$1", [questionId]);
+  });
 }
 export async function completeReview(questionId: string): Promise<void> {
-  const conn = await db();
+  return withAtomicWrite(async conn => {
   const review = (await conn.select<ReviewRow[]>("SELECT * FROM question_reviews WHERE question_id=$1", [questionId]))[0];
   if (!review) return;
   await finishReviewOnConnection(conn, review);
+  });
 }
 export async function reviewQuestions() {
   return (await db()).select<(QuestionRow & {review_issues_json:string;review_note:string;review_created_at:string;review_updated_at:string;latest_user_answer:string|null;latest_grading_mode:string|null;latest_answered_at:string|null;latest_is_correct:number|null})[]>(`
@@ -461,6 +525,7 @@ export async function buildCurrentWrongReview(): Promise<ErrorReviewFile> {
       AND q.id NOT IN (SELECT question_id FROM question_reviews)
       AND a.id=(SELECT a2.id FROM attempts a2 WHERE a2.question_id=q.id ORDER BY a2.id DESC LIMIT 1)
       AND a.is_correct=0
+      AND a.id>COALESCE((SELECT MAX(last_attempt_id) FROM question_answer_revisions WHERE question_id=q.id),0)
     ORDER BY a.answered_at DESC
   `);
   const allNodes = await getNodes();

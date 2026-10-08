@@ -16,7 +16,7 @@ globalThis.__knoopBatchDb={
   },
   async select(sql,p) {return sql.includes("WHERE id=$1") ? rows.has(p[0])?[rows.get(p[0])]:[] : [...rows.values()];}
 };
-const mock={name:"mock-db",setup(b){b.onResolve({filter:/\.\/db$/},a=>a.importer.endsWith("batch-review.ts")?{path:"db",namespace:"mock"}:null);b.onLoad({filter:/.*/,namespace:"mock"},()=>({contents:"export const db = async () => globalThis.__knoopBatchDb;",loader:"js"}));}};
+const mock={name:"mock-db",setup(b){b.onResolve({filter:/\.\/db$/},a=>/(batch-review|temp-review)\.ts$/.test(a.importer)?{path:"db",namespace:"mock"}:null);b.onLoad({filter:/.*/,namespace:"mock"},()=>({contents:'export const db = async () => globalThis.__knoopBatchDb; export const atomicWrite = async () => {throw Error("Use real SQLite review B tests for atomic saves")};',loader:"js"}));}};
 const dir=await mkdtemp(join(tmpdir(),"knoop-batch-test-"));
 try {
   const result=await build({entryPoints:["src/batch-review.ts"],bundle:true,platform:"node",format:"cjs",write:false,plugins:[mock],logLevel:"silent"});
