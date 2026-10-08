@@ -1,4 +1,3 @@
-import validateSchema from "./generated/knoop-bank-v1.1-validator.js";
 import { validateBank } from "./db";
 import type { BankFile, ErrorReviewFile } from "./types";
 
@@ -63,12 +62,11 @@ export function parseAiReviewBank(
     throw new Error("AI 返回结果不是有效 JSON；请重新生成");
   }
   normalizeQuestionFormats(raw);
-  if (!validateSchema(raw)) {
+  let bank:BankFile;
+  try { bank=validateBank(raw); } catch(error) {
     const detail = questionFormatError(raw);
-    const issue = validateSchema.errors?.[0];
-    throw new Error(detail ?? `AI 返回结果不符合 Knoop 题库规范：${issue?.instancePath || "根节点"} ${issue?.message || "结构错误"}`);
+    throw new Error(detail ?? `AI 返回结果不符合 Knoop 题库规范：${error instanceof Error?error.message:String(error)}`);
   }
-  const bank = validateBank(raw);
   if (bank.version !== "1.1" || bank.import.mode !== "new" || bank.import.bankId !== "knoop-ai-preview" || bank.import.bankTitle !== "AI 临时回炉") {
     throw new Error("AI 返回了不符合预览要求的题库信息");
   }

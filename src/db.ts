@@ -1,5 +1,7 @@
 import Database from "@tauri-apps/plugin-sql";
 import { invoke } from "@tauri-apps/api/core";
+import validateV1 from "./generated/knoop-bank-v1-validator.js";
+import validateV11 from "./generated/knoop-bank-v1.1-validator.js";
 import type { BankBundleFile, BankFile, BankRow, ErrorReviewFile, NodeRow, QuestionInput, QuestionRow, RepairReviewFile, ReviewIssue, ReviewRow, SessionRow } from "./types";
 import { parseQuestion } from "./types";
 
@@ -96,6 +98,14 @@ export function validateBank(raw: unknown): BankFile {
   if (!raw || typeof raw !== "object") throw new Error("题库顶层必须是对象");
   const file = raw as BankFile;
   if (file.format !== "knoop-bank" || !["1.0", "1.1"].includes(file.version)) throw new Error("不支持的题库格式或版本");
+  const validator=file.version==="1.0"?validateV1:validateV11;
+  if(!validator(raw)){
+    const errors=validator.errors??[],issue=errors.find(e=>e.keyword==="additionalProperties")??errors.find(e=>e.instancePath.includes("/options"))??errors[0];
+    const index=issue?.instancePath.match(/^\/questions\/(\d+)/)?.[1];
+    const label=index===undefined?"题库":`第 ${Number(index)+1} 题（${file.questions?.[Number(index)]?.id??"未知 ID"}）`;
+    const field=issue?.keyword==="additionalProperties"?`/${issue.params.additionalProperty}`:"";
+    throw new Error(`${label} ${issue?.instancePath||"根节点"}${field}：${issue?.message||"结构无效"}`);
+  }
   if (!file.import || !["new", "merge"].includes(file.import.mode)) throw new Error("import.mode 必须为 new 或 merge");
   assertIdentifier(file.import.bankId, "bankId"); assertText(file.import.bankTitle, "bankTitle");
   if (!Array.isArray(file.nodes) || !Array.isArray(file.questions)) throw new Error("nodes 和 questions 必须是数组");
@@ -109,6 +119,7 @@ export function validateBank(raw: unknown): BankFile {
   }
   const visiting = new Set<string>(); const visited = new Set<string>();
   const parents = new Map(file.nodes.map(n => [n.id, n.parentId]));
+  if(file.import.mode==="new")for(const node of file.nodes)if(node.parentId&&!nodeIds.has(node.parentId))throw new Error(`Node ${node.id} parentId 引用了不存在的 Node：${node.parentId}`);
   const visit = (id: string) => {
     if (visiting.has(id)) throw new Error(`Node 存在循环：${id}`);
     if (visited.has(id)) return;

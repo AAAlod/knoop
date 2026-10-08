@@ -1,0 +1,48 @@
+{
+  "format": "knoop-backup",
+  "version": "1.0",
+  "appVersion": "0.1.10",
+  "exportedAt": "2026-10-09T00:00:00.000Z",
+  "tables": {
+    "banks": [],
+    "nodes": [],
+    "questions": [],
+    "sessions": [],
+    "attempts": [],
+    "favorites": [],
+    "killed_questions": [],
+    "notes": [],
+    "question_reviews": [],
+    "question_answer_revisions": [],
+    "ai_review_groups": [],
+    "ai_review_batch_jobs": []
+  },
+  "counts": {
+    "banks": 0,
+    "nodes": 0,
+    "questions": 0,
+    "sessions": 0,
+    "attempts": 0,
+    "favorites": 0,
+    "killed_questions": 0,
+    "notes": 0,
+    "question_reviews": 0,
+    "question_answer_revisions": 0,
+    "ai_review_groups": 0,
+    "ai_review_batch_jobs": 0
+  },
+  "sequences": {
+    "attempts": 0,
+    "question_answer_revisions": 0
+  },
+  "preferences": {
+    "knoop.scopeCollapsed.v1": null,
+    "knoop.enabledBrushTypes.v1": null,
+    "knoop.scopePresets.v2": null,
+    "knoop.recentScopePreset.v2": null
+  },
+  "integrity": {
+    "algorithm": "SHA-256",
+    "digest": "2c285a08cd65aa2a53f39eb0fdef73ab77421fefd20245282efdaba9547cccaa"
+  }
+}

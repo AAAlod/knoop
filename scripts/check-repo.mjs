@@ -55,6 +55,7 @@ for (const format of formats) {
   assert(read('src/db.ts').includes('"' + format + '"'), 'Runtime format: ' + format);
 }
 const schemaForExample = new Map([
+  ['sample-backup.json', 'knoop-backup-v1.schema.json'],
   ['sample-bank.json', 'knoop-bank-v1.1.schema.json'],
   ['sample-bundle.json', 'knoop-bundle-v1.schema.json'],
   ['sample-error-review.json', 'knoop-error-review-v1.1.schema.json'],
@@ -64,7 +65,7 @@ const ajv = new Ajv2020({ allErrors: true, strict: false });
 addFormats(ajv);
 for (const name of readdirSync(join(root, 'examples')).filter(x => x.endsWith('.json'))) {
   const example = json(`examples/${name}`);
-  assert(formats.has(example.format), `example format: ${name}`);
+  assert(formats.has(example.format) || example.format === 'knoop-backup', `example format: ${name}`);
   const schemaName = schemaForExample.get(name);
   assert(schemaName, `unmapped example: ${name}`);
   if (schemaName) {
