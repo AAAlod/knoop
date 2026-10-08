@@ -17,6 +17,9 @@ pub fn run() {
         .plugin(tauri_plugin_sql::Builder::default().build())
         .invoke_handler(tauri::generate_handler![
             storage::atomic_write,
+            storage::save_restore_safety_copy,
+            storage::list_restore_safety_copies,
+            storage::read_restore_safety_copy,
             ai::set_ai_config,
             ai::get_ai_config_status,
             ai::clear_ai_config,

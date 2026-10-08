@@ -31,6 +31,7 @@ async function initialize(): Promise<Database> {
     `CREATE TABLE IF NOT EXISTS notes (question_id TEXT PRIMARY KEY, content TEXT NOT NULL, updated_at TEXT NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS question_reviews (question_id TEXT PRIMARY KEY, issues_json TEXT NOT NULL DEFAULT '[]', note TEXT NOT NULL DEFAULT '', question_snapshot_json TEXT NOT NULL, was_killed_before INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS ai_review_batch_jobs (id TEXT PRIMARY KEY, model TEXT NOT NULL, review_json TEXT NOT NULL, batches_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+    `CREATE TABLE IF NOT EXISTS backup_preference_journal (id INTEGER PRIMARY KEY CHECK(id=1), previous_json TEXT NOT NULL, target_json TEXT NOT NULL, committed INTEGER NOT NULL DEFAULT 0)`,
     `CREATE TABLE IF NOT EXISTS ai_review_groups (id TEXT PRIMARY KEY, source_question_id TEXT NOT NULL, source_question_title TEXT NOT NULL, model TEXT NOT NULL, generated_at TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, bank_json TEXT NOT NULL, question_meta_json TEXT NOT NULL, current_index INTEGER NOT NULL DEFAULT 0, state_json TEXT NOT NULL DEFAULT '{}', results_json TEXT NOT NULL DEFAULT '[]', completed_at TEXT)`,
     "CREATE INDEX IF NOT EXISTS idx_questions_node ON questions(node_id)",
     "CREATE INDEX IF NOT EXISTS idx_attempts_question ON attempts(question_id, id DESC)",
@@ -48,7 +49,7 @@ export async function atomicWrite(steps: AtomicStep[]): Promise<void> {
 }
 type WriteConnection = Pick<Database,"select"|"execute">;
 // Plan using existing business rules; recheck every read inside the native transaction.
-async function withAtomicWrite<T>(plan: (conn: WriteConnection) => Promise<T>): Promise<T> {
+async function collectWrites<T>(plan: (conn: WriteConnection) => Promise<T>): Promise<{result:T;steps:AtomicStep[]}> {
   const real = await db(), steps: AtomicStep[] = [];
   const conn: WriteConnection = {
     async select<T>(sql: string, params: unknown[] = []): Promise<T> {
@@ -62,8 +63,10 @@ async function withAtomicWrite<T>(plan: (conn: WriteConnection) => Promise<T>): 
     }
   };
   const result = await plan(conn);
-  await atomicWrite(steps);
-  return result;
+  return {result,steps};
+}
+async function withAtomicWrite<T>(plan: (conn: WriteConnection) => Promise<T>): Promise<T> {
+  const collected=await collectWrites(plan);await atomicWrite(collected.steps);return collected.result;
 }
 function answerIdentity(q: QuestionInput): string {
   return canonicalJson({type:q.type,answer:Array.isArray(q.answer)?[...q.answer].sort():q.answer,back:q.back,content:q.content});
@@ -191,8 +194,11 @@ async function finishReviewOnConnection(conn: WriteConnection, review: ReviewRow
   if (!review.was_killed_before) await conn.execute("DELETE FROM killed_questions WHERE question_id=$1", [review.question_id]);
 }
 
-export async function importBank(file: BankFile): Promise<{ repaired: number }> {
-  return withAtomicWrite(async conn => {
+export interface ImportSummary {bankId:string;title:string;mode:"new"|"merge";incoming:number;added:number;changed:number;unchanged:number;omitted:number;answerChanges:number;types:Record<string,number>}
+export interface ImportPreview {summary:ImportSummary;steps:AtomicStep[];result:{repaired:number}}
+export async function prepareBankImport(input:BankFile):Promise<ImportPreview>{
+  const file=validateBank(input);
+  const planned=await collectWrites(async conn => {
   const existing = await conn.select<BankRow[]>("SELECT id, title FROM banks WHERE id = $1", [file.import.bankId]);
   if (file.import.mode === "new" && existing.length) throw new Error(`题库 ${file.import.bankId} 已存在`);
   if (file.import.mode === "merge" && !existing.length) throw new Error(`要合并的题库 ${file.import.bankId} 不存在`);
@@ -235,8 +241,20 @@ export async function importBank(file: BankFile): Promise<{ repaired: number }> 
       repaired++;
     }
   }
-  return { repaired };
+  const incomingIds=new Set(file.questions.map(q=>key(file.import.bankId,q.id)));
+  const changed=file.questions.filter(q=>previousById.has(key(file.import.bankId,q.id))&&canonicalJson(JSON.parse(previousById.get(key(file.import.bankId,q.id))!))!==canonicalJson(q));
+  const added=file.questions.filter(q=>!previousById.has(key(file.import.bankId,q.id))).length;
+  const summary:ImportSummary={bankId:file.import.bankId,title:file.import.bankTitle,mode:file.import.mode,incoming:file.questions.length,added,changed:changed.length,unchanged:file.questions.length-added-changed.length,omitted:localQuestions.filter(q=>!incomingIds.has(q.id)).length,answerChanges:changed.filter(q=>answerIdentity(JSON.parse(previousById.get(key(file.import.bankId,q.id))!))!==answerIdentity(q)).length,types:{}};
+  for(const q of file.questions)summary.types[q.type]=(summary.types[q.type]??0)+1;
+  return { repaired,summary };
   });
+  return {summary:planned.result.summary,steps:planned.steps,result:{repaired:planned.result.repaired}};
+}
+export async function applyBankImport(preview:ImportPreview):Promise<{repaired:number}>{
+  await atomicWrite(preview.steps);return preview.result;
+}
+export async function importBank(file: BankFile): Promise<{ repaired: number }> {
+  return applyBankImport(await prepareBankImport(file));
 }
 
 export async function getBanks() { return (await db()).select<BankRow[]>("SELECT id,title,created_at,updated_at FROM banks ORDER BY created_at"); }
