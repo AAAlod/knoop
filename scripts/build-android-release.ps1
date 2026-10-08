@@ -77,6 +77,7 @@ if ($Clean) {
 }
 Set-Location $repo
 if (-not (Test-Path 'node_modules')) { Invoke-Checked $npm @('ci') }
+Invoke-Checked $npm @('run','check:repo')
 Invoke-Checked $npm @('run','build')
 $frontendBytes = (Get-ChildItem 'dist' -Recurse -File | Measure-Object Length -Sum).Sum
 
@@ -116,16 +117,12 @@ $signed = 'no'
 if ($Keystore) {
   if (-not (Test-Path $Keystore)) { throw 'Specified keystore not found.' }
   if (-not $KeyAlias) { throw 'Pass -KeyAlias with -Keystore.' }
-  $password = [Environment]::GetEnvironmentVariable($KeystorePasswordEnv)
-  if (-not $password) { throw "Set $KeystorePasswordEnv before signing." }
-  $passwordFile = Join-Path $artifacts '.signing-password.tmp'
-  try {
-    [IO.File]::WriteAllText($passwordFile, $password, [Text.UTF8Encoding]::new($false))
-    $final = Join-Path $artifacts "knoop-v$version-arm64-release.apk"
-    Invoke-Checked $apksigner @('sign','--ks',$Keystore,'--ks-key-alias',$KeyAlias,'--ks-pass',"file:$passwordFile",'--out',$final,$aligned)
-    Invoke-Checked $apksigner @('verify','--verbose',$final)
-    $signed = 'yes (verified)'
-  } finally { if (Test-Path $passwordFile) { Remove-Item -LiteralPath $passwordFile -Force } }
+  if ($KeystorePasswordEnv -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') { throw 'Invalid password environment variable name.' }
+  if (-not [Environment]::GetEnvironmentVariable($KeystorePasswordEnv)) { throw "Set $KeystorePasswordEnv before signing." }
+  $final = Join-Path $artifacts "knoop-v$version-arm64-release.apk"
+  Invoke-Checked $apksigner @('sign','--ks',$Keystore,'--ks-key-alias',$KeyAlias,'--ks-pass',"env:$KeystorePasswordEnv",'--out',$final,$aligned)
+  Invoke-Checked $apksigner @('verify','--verbose',$final)
+  $signed = 'yes (verified)'
 }
 
 $apk = [IO.Compression.ZipFile]::OpenRead($final)

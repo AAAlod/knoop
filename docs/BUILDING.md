@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Node.js and npm compatible with the lockfile
+- Node.js 24 and npm compatible with the lockfile (SQLite integration tests use `node:sqlite`)
 - Rust toolchain with the `aarch64-linux-android` target
 - `cargo-ndk` (the Alpha build was verified with 4.1.2)
 - JDK 17
@@ -47,3 +47,11 @@ Remove-Item Env:KNOOP_KEYSTORE_PASSWORD
 ```
 
 The script verifies signed APKs with `apksigner`. It reports the APK path and size, frontend size, native library size, DEX size, strip check, and signing status. Build output remains under ignored directories.
+
+Signing uses `--ks-pass env:KNOOP_KEYSTORE_PASSWORD` (or the explicitly named password environment variable), without writing a temporary password file. Keep the variable confined to the build process and clear it afterward; never put passwords in Git or logs. Existing keystore and alias remain under the owner's control. `npm run test:signing` runs normal/failure/interruption probes with a synthetic password and mock signer on PowerShell 7.
+
+## Checks
+
+GitHub Actions installs dependencies with `npm ci` and runs `npm run check:ci`, without Android signing secrets or APK publishing. The same entry runs locally. `npm run test:ci-guards` temporarily injects a TypeScript error and test assertion failure, verifies nonzero exits, and restores the affected files; run it alone, then run `check:ci` to verify the restored state. Hosted CI runs require a pushed commit and are separate from local verification.
+
+Browser suites A/B/C accept `-- --ui`; D/E always run the browser. Supply an installed Playwright module via `PLAYWRIGHT_MODULE_PATH` and Chrome via `CHROME_PATH`, or use a normal Playwright installation. Rust tests are run locally with `cargo test --offline`; the basic Ubuntu workflow intentionally avoids platform GUI dependencies and does not claim Rust/Android coverage.

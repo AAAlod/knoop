@@ -1,7 +1,7 @@
 {
   "name": "knoop",
   "private": true,
-  "version": "0.1.10",
+  "version": "0.1.11",
   "type": "module",
   "scripts": {
     "dev": "vite --port 1420 --strictPort",
@@ -16,7 +16,12 @@
     "test:review-b": "node scripts/test-review-b.mjs",
     "test:review-c": "node scripts/test-review-c.mjs",
     "test:review-d": "node scripts/test-review-d.mjs",
-    "test:review-e": "node scripts/test-review-e.mjs"
+    "test:review-e": "node scripts/test-review-e.mjs",
+    "check:ci": "node scripts/check-ci.mjs",
+    "test:signing": "node scripts/test-release-signing.mjs",
+    "test:ci-guards": "node scripts/test-ci-guards.mjs",
+    "fixtures:device": "node scripts/generate-device-fixtures.mjs",
+    "test:device-fixtures": "node scripts/test-device-fixtures.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.8.0",

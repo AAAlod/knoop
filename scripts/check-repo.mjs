@@ -18,8 +18,12 @@ assert(lock.name === pkg.name && lock.version === pkg.version && lock.packages?.
 assert(tauri.productName === 'Knoop' && tauri.identifier === 'com.kehai.knoop' && tauri.version === pkg.version, 'Tauri identity');
 assert(/name\s*=\s*"knoop"/.test(cargo) && /name\s*=\s*"knoop_lib"/.test(cargo), 'Rust identity');
 assert(cargo.includes('version = "' + pkg.version + '"'), 'Cargo version');
+assert(read('src-tauri/Cargo.lock').includes('name = "knoop"\nversion = "' + pkg.version + '"') || read('src-tauri/Cargo.lock').includes('name = "knoop"\r\nversion = "' + pkg.version + '"'), 'Cargo lock version');
+assert(read('README.md').includes('**' + pkg.version + ' Alpha**'), 'README version');
 const tauriProperties = read('src-tauri/gen/android/app/tauri.properties');
 assert(tauriProperties.includes('tauri.android.versionName=' + pkg.version), 'Android versionName');
+const androidCode=Number(tauriProperties.match(/^tauri.android.versionCode=(\d+)$/m)?.[1]);
+assert(Number.isSafeInteger(androidCode)&&androidCode>0&&(pkg.version!=='0.1.11'||androidCode===112), 'Android versionCode');
 for (const setting of ['strip = true', 'lto = true', 'opt-level = "z"', 'codegen-units = 1', 'panic = "unwind"']) assert(cargo.includes(setting), `Release profile: ${setting}`);
 assert(gradle.includes('applicationId = "com.kehai.knoop"'), 'Android applicationId');
 assert(read('src/db.ts').includes('sqlite:knoop.db'), 'SQLite filename');

@@ -2,7 +2,7 @@
 
 > 一个本地优先的个人知识练习工具。
 
-**0.1.3 Alpha**
+**0.1.11 Alpha**
 
 [![AI-assisted development](https://img.shields.io/badge/development-AI--assisted-6f42c1)](#ai-辅助开发)
 
@@ -26,7 +26,11 @@ Knoop 最初只是一个临时需求：我想要一个能直接导入自己题�
 - 题目审核、返修和同 ID merge；
 - 错题与返修 JSON 导出；
 - 多题库导入与 bundle 导出；
-- 本地 KaTeX / LaTeX 公式渲染。
+- 本地 KaTeX / LaTeX 公式渲染；
+- 未完成学习列表、同范围再来一组；
+- AI 单题/部分批量回炉、待审核草稿、临时练习结果回顾和错题重练；
+- 完整学习状态备份 1.1、恢复前安全副本，兼容读取 1.0 备份；
+- 导入前逐库预览新增/覆盖/答案变更，再确认写入。
 
 一个比较典型的使用循环是：
 
@@ -52,11 +56,13 @@ Knoop 当前没有账号系统，也不依赖云端学习服务。
 
 因此在卸载应用、清除应用数据或进行较大版本迁移前，建议自行备份重要题库和数据。
 
+通过首页“备份与恢复”导出的完整备份覆盖正式学习、AI 临时组/草稿及学习偏好。另存到应用外部：卸载或清除数据会删除应用内安全副本。API Key 不包含在备份中。AI 调用可能收费，取消不能保证服务商不计费；结果需人工核对。
+
 ## 题库格式
 
 Knoop 使用结构化 JSON 作为题库和部分学习数据的交换格式。
 
-现有协议名称为 `knoop-bank`、`knoop-bundle`、`knoop-error-review` 和 `knoop-repair-review`。
+现有协议名称为 `knoop-bank`、`knoop-bundle`、`knoop-error-review`、`knoop-repair-review` 和独立完整备份 `knoop-backup`。
 
 详细格式、Schema 和示例见：
 
@@ -85,6 +91,8 @@ Knoop 目前主要使用：
 安装依赖后运行 `npm run build` 构建前端；Android Release 的工具要求、构建命令和可选签名方式见 [构建说明](docs/BUILDING.md)。
 
 目前仅提供 Android **arm64-v8a（64 位 ARM）** Release APK，其他架构尚未支持。
+
+基础无签名检查运行 `npm run check:ci`；GitHub Actions 执行相同入口，包含构建、仓库检查、AI/临时题组/批次和 SQLite 回归。Android 真机验收见 [0.1.11 检查清单](docs/device-test-checklist-0.1.11.md)。合成题库运行 `npm run fixtures:device` 生成到 `artifacts/device-tests/`，不含真实题目或密钥。
 
 ## AI 辅助开发
 
