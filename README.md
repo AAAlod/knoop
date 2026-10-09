@@ -4,6 +4,8 @@
 
 **0.1.12 Alpha**
 
+0.1.12 UI / 文案整改与证据见 [整改报告](docs/review-ui-0.1.12-status.md)，Android 真机验收见 [0.1.12 检查清单](docs/device-test-checklist-0.1.12.md)。
+
 [![AI-assisted development](https://img.shields.io/badge/development-AI--assisted-6f42c1)](#ai-辅助开发)
 
 [简体中文](README.md)

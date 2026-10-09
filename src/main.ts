@@ -304,28 +304,27 @@ async function home() {
   selectedScopeNodes.clear(); scopeNodesCache = []; scopeContentNodeIds.clear();
   const resume = await latestSession(); const summary = await librarySummary([...enabledBrushTypes]); const pendingReviews = (await reviewQuestions()).length; const tempGroupCount = (await listTempGroups()).length; const previousBatchJob = await latestBatchJob();
   const pendingDraftCount=(await listAiDrafts()).length;
+  const wrongCount=(await wrongQuestions()).length,favoriteCount=(await favoriteQuestions()).length;
   const recent = scopePresets.find(p=>p.id===recentPresetId());
   const recentCard = recent ? `<section class="home-recent-preset"><div><small>最近使用</small><b>${esc(recent.name)}</b><span>${esc(presetSummary(recent))}</span></div><button type="button" data-action="start-preset:${esc(recent.id)}">开始</button></section>` : "";
-  app.innerHTML = `<main class="home-main"><div class="home-heading"><h1>Knoop</h1></div><div class="home-summary"><span>题库 ${summary.banks}</span><span>总 ${summary.totalContent}</span><span>可刷 ${summary.questions}</span><span>背诵 ${summary.memorization}</span></div>
-    <section class="home-group home-study"><h2 class="section-title">开始学习</h2><div class="stack">
+  const heading=`<div class="home-heading"><h1>Knoop</h1></div>`;
+  if(!summary.banks&&!resume&&!tempGroupCount&&!pendingDraftCount&&!previousBatchJob){app.innerHTML=`<main class="home-main">${heading}<div class="home-study">${button("导入题库","import","primary")}</div></main>`;return;}
+  app.innerHTML = `<main class="home-main">${heading}<div class="home-summary"><span>题库 ${summary.banks}</span><span>总 ${summary.totalContent}</span><span>可刷 ${summary.questions}</span><span>背诵 ${summary.memorization}</span></div>
+    <section class="home-study"><div class="stack">
       ${resume ? `<div class="home-resume">${button("继续", `resume:${resume.id}`, "primary")}<p class="home-session-summary">${esc(sessionSummary(resume))}</p></div>` : ""}
-      ${resume ? button("未完成","sessions") : ""}
-      ${summary.banks ? button("新练习", "scope", resume ? "" : "primary") : button("导入题库", "import", resume ? "" : "primary")}
+      ${summary.banks ? button("新练习", "scope", resume ? "secondary" : "primary") : button("导入题库", "import", resume ? "secondary" : "primary")}
     </div></section>
-    <section class="home-group"><h2 class="section-title">常用练习</h2>${recentCard}<div class="stack">
-      ${button("练习方案", "presets")}
-    </div></section>
-    <section class="home-group"><h2 class="section-title">AI 回炉</h2><div class="stack">
-      ${button(tempGroupCount ? `AI 题组 ${tempGroupCount}` : "AI 题组", "temp-groups")}
-      ${pendingDraftCount?button(`待审核草稿 ${pendingDraftCount}`,"ai-drafts"):""}
-      ${previousBatchJob ? button("继续任务",`batch-open:${previousBatchJob.id}`) : ""}
-    </div></section>
-    <section class="home-group"><h2 class="section-title">学习记录</h2><div class="stack">
-      <div class="grid">${button("错题", "wrong")}${button("收藏", "favorites")}</div>
-      <div class="grid">${button(pendingReviews?`待返修 ${pendingReviews}`:"待返修", "reviews")}${button("笔记", "notes")}</div>
-    </div></section>
-    <section class="home-group"><h2 class="section-title">题库与统计</h2><div class="stack">
-      <div class="grid">${button("题库", "import")}${button("统计", "stats")}</div>
+    ${recentCard}
+    <div class="home-shortcuts grid">${button(`错题 ${wrongCount}`,"wrong","secondary")}${button(`收藏 ${favoriteCount}`,"favorites","secondary")}</div>
+    <nav class="home-nav" aria-label="其他功能">
+      ${resume?button("未完成","sessions","secondary"):""}${button("练习方案","presets","secondary")}
+      ${button("题库","import","secondary")}${button("统计","stats","secondary")}${button("备份与恢复","backup","secondary")}
+      ${button("笔记","notes","secondary")}${button(pendingReviews?`待返修 ${pendingReviews}`:"待返修","reviews","secondary")}
+    </nav>
+    <section class="home-ai"><h2 class="section-title">AI 回炉</h2><div class="home-nav">
+      ${button("批量回炉","batch-new","secondary")}${button(tempGroupCount?`AI 题组 ${tempGroupCount}`:"AI 题组","temp-groups","secondary")}
+      ${pendingDraftCount?button(`草稿 ${pendingDraftCount}`,"ai-drafts","secondary"):""}
+      ${previousBatchJob?button("继续任务",`batch-open:${previousBatchJob.id}`,"secondary"):""}
     </div></section></main>`;
   renderMath();
 }
@@ -333,10 +332,10 @@ async function home() {
 async function sessionsView():Promise<void>{
   const sessions=await unfinishedSessions(),nodes=await getNodes(),titles=new Map(nodes.map(n=>[n.id,n.title]));
   const present=new Set((await (await db()).select<{id:string}[]>("SELECT id FROM questions")).map(row=>row.id));
-  const cards=sessions.map(session=>{
+  const cards=sessions.map((session,index)=>{
     const scope=JSON.parse(session.scope_json),ids=JSON.parse(session.question_ids_json) as string[],available=ids.filter(id=>present.has(id)).length;
     const names=Array.isArray(scope.nodeIds)?scope.nodeIds.map((id:string)=>titles.get(id)??"失效范围").join("、"):session.mode==="wrong"?"当前错题":session.mode==="favorites"?"收藏":"已保存范围";
-    return `<section class="card"><h2>${esc(sessionSummary(session))}</h2><p>${esc(names)} · 更新 ${esc(formatUpdatedAt(session.updated_at))}</p>${available===ids.length?button("继续学习",`resume:${session.id}`,"primary"):`<p>范围内容已失效，请重新选择范围。现存 ${available} / ${ids.length} 项。</p>`}</section>`;
+    return `<section class="card"><h2>${esc(sessionSummary(session))}</h2><p>${esc(names)} · 更新 ${esc(formatUpdatedAt(session.updated_at))}</p>${available===ids.length?button("继续",`resume:${session.id}`,index===0?"primary":"secondary"):`<p>范围内容已失效，请重新选择范围。现存 ${available} / ${ids.length} 项。</p>`}</section>`;
   }).join("");
   shell("未完成",cards||emptyState("暂无未完成练习","",{text:"新练习",id:"scope"}));
 }
@@ -382,9 +381,9 @@ let nextImportId=0;
 let importQueue:Array<{id:number;label:string;raw:unknown;preview?:ImportPreview;error?:string}>=[];
 let importFeedback="";
 function importPreviewsHtml():string{
-  return importQueue.map(entry=>{
+  return importQueue.map((entry,index)=>{
     const s=entry.preview?.summary;
-    return `<section class="card"><h2>${esc(entry.label)}</h2>${s?`<p>${esc(s.title)} · ${esc(s.bankId)} · ${s.mode==="new"?"新建题库":"合并题库"}</p><p>新增 ${s.added} · 内容覆盖 ${s.changed} · 相同 ${s.unchanged} · 保留文件外内容 ${s.omitted}</p><p>${Object.entries(s.types).map(([type,count])=>`${esc(questionTypeLabel({type} as QuestionInput))} ${count}`).join(" · ")}</p>${s.changed?`<p>将覆盖 ${s.changed} 项已有内容，可能包含你的本地编辑；答案变更 ${s.answerChanges} 项，历史判分保留。</p>`:""}`:""}${entry.error?`<p class="message error">${esc(entry.error)}</p>`:""}<div class="grid">${button("取消",`cancel-import:${entry.id}`)}${s?button("确认导入",`confirm-import:${entry.id}`,"primary"):""}</div></section>`;
+    return `<section class="card"><h2>${esc(entry.label)}</h2>${s?`<p>${esc(s.title)} · ${esc(s.bankId)} · ${s.mode==="new"?"新建题库":"合并题库"}</p><p>新增 ${s.added} · 内容覆盖 ${s.changed} · 相同 ${s.unchanged} · 保留文件外内容 ${s.omitted}</p><p>${Object.entries(s.types).map(([type,count])=>`${esc(questionTypeLabel({type} as QuestionInput))} ${count}`).join(" · ")}</p>${s.changed?`<p>将覆盖 ${s.changed} 项已有内容，可能包含你的本地编辑；答案变更 ${s.answerChanges} 项，历史判分保留。</p>`:""}`:""}${entry.error?`<p class="message error">${esc(entry.error)}</p>`:""}<div class="grid">${button("取消",`cancel-import:${entry.id}`)}${s?button("确认导入",`confirm-import:${entry.id}`,index===0?"primary":"secondary"):""}</div></section>`;
   }).join("");
 }
 async function refreshImportPreviews():Promise<void>{
@@ -435,7 +434,7 @@ async function backupView():Promise<void>{
     if(copies.length)archives=`<details class="card"><summary>恢复前安全副本（${copies.length}）</summary><p>最近 10 份，可重新载入并预览恢复。</p>${copies.slice(0,10).map(copy=>{const stamp=copy.name.match(/(\d+)\.json$/)?.[1];const date=stamp?new Date(Number(BigInt(stamp)/1000000n)).toISOString():"";return button(`${date?formatUpdatedAt(date):"安全副本"} · ${Math.ceil(copy.bytes/1024)} KB`,`backup-load:${copy.name}`);}).join("")}</details>`;
   }catch(error){archives=`<p class="message error">安全副本列表暂不可用：${esc(error instanceof Error?error.message:String(error))}</p>`;}
   const preview=restoreFile?`<section class="card"><h2>待恢复备份</h2>${backupSummary(restoreFile)}<p>恢复将完整替换本机题库与学习记录。API 配置保留，备份不包含 API Key。</p>${restorePlan?`<p>已生成恢复前安全副本，可在本页重新载入。</p>${button("确认替换并恢复","backup-confirm","destructive-action")}${button("另存恢复前备份","backup-save-before")}`:button("备份当前数据并准备恢复","backup-prepare","primary")}${button("取消恢复","backup-cancel")}</section>`:"";
-  shell("完整备份 / 恢复",`<p>完整保存题库、历史作答、笔记、收藏、进度、回炉结果及学习偏好；不包含 API Key。</p>${button("导出完整备份","backup-export","primary")}${button("选择完整备份","backup-pick")}<input id="backup-file" class="visually-hidden-file" type="file" accept="application/json,.json"><div id="backup-message" class="message error">${esc(backupMessage)}</div>${preview}${archives}`);
+  shell("完整备份 / 恢复",`<p>完整保存题库、历史作答、笔记、收藏、进度、回炉结果及学习偏好；不包含 API Key。</p>${button("导出完整备份","backup-export",restoreFile?"secondary":"primary")}${button("选择完整备份","backup-pick")}<input id="backup-file" class="visually-hidden-file" type="file" accept="application/json,.json"><div id="backup-message" class="message error">${esc(backupMessage)}</div>${preview}${archives}`);
   document.querySelector<HTMLInputElement>("#backup-file")!.onchange=e=>{
     const file=(e.target as HTMLInputElement).files?.[0];if(!file)return;
     void withStudyAction(async()=>{try{restoreFile=await validateBackup(JSON.parse(await file.text()));restorePlan=null;backupMessage="";}catch(error){restoreFile=null;restorePlan=null;backupMessage=error instanceof Error?error.message:String(error);}await backupView();}).catch(reportSaveError);
@@ -550,7 +549,7 @@ function reviewQuestionPreview(q: QuestionInput): string {
   const explain = `<div class="review-preview-section"><b>解析</b><div class="multiline">${q.explanation ? esc(q.explanation) : "无解析"}</div></div>`;
   if (q.type === "single_choice" || q.type === "multiple_choice") {
     const answerIds = new Set(Array.isArray(q.answer) ? q.answer : [String(q.answer ?? "")]);
-    const options = (q.options ?? []).map(o => `<div class="review-preview-option ${answerIds.has(o.id)?"correct":""}"><b>${esc(o.id)}</b><span class="multiline">${esc(o.text)}</span></div>`).join("");
+    const options = (q.options ?? []).map(o => `<div class="review-preview-option ${answerIds.has(o.id)?"correct":""}"><b>${esc(o.id)}</b><span class="option-copy"><span class="multiline">${esc(o.text)}</span>${answerIds.has(o.id)?'<small class="option-result">✓ 正确答案</small>':""}</span></div>`).join("");
     return `<div class="review-question-preview"><div class="review-preview-head"><span class="type">${questionTypeLabel(q)}</span></div><div class="review-preview-section"><b>题干</b><div class="multiline">${esc(q.stem)}</div></div><div class="review-preview-options">${options}</div>${explain}</div>`;
   }
   if (q.type === "blank") return `<div class="review-question-preview"><div class="review-preview-head"><span class="type">${questionTypeLabel(q)}</span></div><div class="review-preview-section"><b>题干</b><div class="multiline">${esc(q.stem)}</div></div><div class="review-preview-section"><b>标准答案</b><div class="multiline">${esc(String(q.answer ?? ""))}</div></div>${explain}</div>`;
@@ -739,7 +738,7 @@ async function quizView(){
   else if(q.type==="memorization") content=memorizationBody(q,shown);
   else {
     content=`<div class="type">${q.type==="single_choice"?"单选题":q.type==="multiple_choice"?"多选题":"填空题"}</div><h2 class="stem">${esc(q.stem)}</h2>`;
-    if(q.options) content+=`${!pageState.submitted && !pageState.pendingManual ? '<p class="option-help">长按选项可标记排除，再次长按可撤销。</p>' : ''}<div class="options">${q.options.map(o=>`<button class="option ${selection.has(o.id)?"selected":""} ${excludedOptions.has(o.id)?"excluded":""} ${pageState.submitted?(Array.isArray(q.answer)?q.answer:[q.answer]).includes(o.id)?"right":selection.has(o.id)?"wrong":"":""}" data-action="option:${esc(o.id)}" data-option-id="${esc(o.id)}" ${pageState.submitted?"disabled":""}><b>${esc(o.id)}</b><span>${esc(o.text)}</span></button>`).join("")}</div>`;
+    if(q.options) content+=`${!pageState.submitted && !pageState.pendingManual ? '<p class="option-help">长按选项可标记排除，再次长按可撤销。</p>' : ''}<div class="options">${q.options.map(o=>`<button class="option ${selection.has(o.id)?"selected":""} ${excludedOptions.has(o.id)?"excluded":""} ${pageState.submitted?(Array.isArray(q.answer)?q.answer:[q.answer]).includes(o.id)?"right":selection.has(o.id)?"wrong":"":""}" data-action="option:${esc(o.id)}" data-option-id="${esc(o.id)}" aria-pressed="${selection.has(o.id)}" ${pageState.submitted?"disabled":""}><b>${esc(o.id)}</b><span class="option-copy"><span>${esc(o.text)}</span>${optionResult(q,o.id,selection.has(o.id),!!pageState.submitted)}</span></button>`).join("")}</div>`;
     if(q.type==="blank") content+=`<input id="blank" class="blank" placeholder="输入答案" value="${esc(blankValue)}" ${pageState.submitted||pageState.pendingManual?"disabled":""}>`;
     if(pageState.submitted||pageState.pendingManual) content+=resultPanel(q);
   }
@@ -752,11 +751,17 @@ async function quizView(){
   else bottom=`<button class="primary" data-action="submit" ${canSubmit?"":"disabled"}>提交</button>`;
   const quickAvailable=["sequential","random","recall","memorization"].includes(activeSession.mode);
   const quickButton=quickAvailable?`<button class="header-action ${quickMode?"active":""}" data-action="toggle-quick" aria-pressed="${quickMode}">快刷${quickMode?"✓":""}</button>`:"";
-  shell(progress,`<article class="quiz">${content}</article><div class="question-actions"><button data-action="favorite:${esc(row.id)}">${fav?"★ 已收藏":"☆ 收藏"}</button><button class="${killed?"restore-action":"destructive-action"}" data-action="kill:${esc(row.id)}" ${reviewed?"disabled":""}>${reviewed?"已斩杀":killed?"恢复":"斩杀"}</button><button class="${reviewed?"review-active":""}" data-action="review:${esc(row.id)}">${reviewed?"● 待返修":"审核"}</button><button class="${note?"note-active":""}" data-action="note:${esc(row.id)}">${note?"● 笔记":"笔记"}</button><button data-action="edit:${esc(row.id)}">编辑</button></div>${bottom?`<div class="bottom-actions">${bottom}</div>`:""}`,true,quickButton,"session-directory");
+  shell(progress,`<article class="quiz">${content}</article><div class="question-actions"><button data-action="favorite:${esc(row.id)}">${fav?"★ 已收藏":"☆ 收藏"}</button><button class="${note?"note-active":""}" data-action="note:${esc(row.id)}">${note?"● 笔记":"笔记"}</button><details class="question-more"><summary>更多</summary><div class="question-more-actions"><button data-action="edit:${esc(row.id)}">编辑</button><button class="${killed?"restore-action":"destructive-action"}" data-action="kill:${esc(row.id)}" ${reviewed?"disabled":""}>${reviewed?"已斩杀":killed?"恢复":"斩杀"}</button><button class="${reviewed?"review-active":""}" data-action="review:${esc(row.id)}">${reviewed?"● 待返修":"标记问题"}</button></div></details></div>${bottom?`<div class="bottom-actions">${bottom}</div>`:""}`,true,quickButton,"session-directory");
   const blank=document.querySelector<HTMLInputElement>("#blank"); if(blank) blank.oninput=()=>{if(studyBusy)return;blankValue=blank.value; const submit=document.querySelector<HTMLButtonElement>('[data-action="submit"]'); if(submit)submit.disabled=!blankValue.trim(); void persistDraft().catch(reportSaveError);};
   bindOptionLongPress();
 }
 function explanation(q:QuestionInput){return `<div class="explain"><h3>解析</h3><div class="multiline">${q.explanation?esc(q.explanation):"无解析"}</div></div>`;}
+function optionResult(q:QuestionInput,id:string,picked:boolean,submitted:boolean):string {
+  if(!submitted)return "";
+  const correct=(Array.isArray(q.answer)?q.answer:[q.answer]).includes(id);
+  const label=correct?picked?"✓ 选对":q.type==="multiple_choice"?"✓ 漏选":"✓ 正确答案":picked?"✕ 错选":"";
+  return label?`<small class="option-result">${label}</small>`:"";
+}
 function answerText(q:QuestionInput){ if(q.options){const ids=Array.isArray(q.answer)?q.answer:[q.answer]; return q.options.filter(o=>ids.includes(o.id)).map(o=>`${o.id}. ${o.text}`).join("；");} return String(q.answer??q.back??q.content??""); }
 function resultPanel(q:QuestionInput){const answer=q.options?"":`<div class="multiline"><b>正确答案：</b>${esc(answerText(q))}</div>`;return `<section class="answer-panel"><h3>${pageState.pendingManual?"请自行判断":pageState.correct?"回答正确":"回答错误"}</h3>${answer}${explanation(q)}</section>`;}
 function reportSaveError(error: unknown){notify(error instanceof Error?error.message:String(error));}
@@ -1004,7 +1009,7 @@ async function listView(kind:ListKind) {
   if(kind==="wrong"){
     const rows=await wrongQuestions();
     const previousBatch=await latestBatchJob();
-    const actions=`${button("导出","export-error-review")}${button("批量回炉","batch-new")}${rows.some(graded)?button("练习","practice:wrong"):""}${previousBatch?button("继续批量任务",`batch-open:${previousBatch.id}`):""}`;
+    const actions=`${button("导出","export-error-review")}${button("批量回炉","batch-new")}${rows.some(graded)?button("练习","practice:wrong","primary"):""}${previousBatch?button("继续批量任务",`batch-open:${previousBatch.id}`):""}`;
     const body=rows.map(r=>{const q=parseQuestion(r);const difference=q.type==="multiple_choice"?multipleChoiceDifference(q,r.latest_user_answer):`<b>本次错误答案</b><div class="multiline">${esc(storedUserAnswerText(q,r.latest_user_answer))}</div>`;const extra=`<section class="expanded-meta wrong-meta">${difference}<small>${esc(r.latest_answered_at)}</small></section>`;return expandableCard("wrong",r,"",button("AI 回炉",`ai-review:${encodeURIComponent(r.id)}`),extra)}).join("");
     const semantics = "最近一次答错的题目才显示，之后答对会自动移出；已斩杀、待返修题目不显示。答案修改或返修完成后，仅看此后的新作答。";
     const rules=`<details class="stats-rules"><summary>统计规则</summary><p class="list-help">${semantics}</p></details>`;
@@ -1032,10 +1037,10 @@ async function saveJsonFile(filename:string,data:unknown,title:string){
 }
 async function tempGroupsView(): Promise<void> {
   const groups = await listTempGroups();
-  const cards = groups.map(group => {
+  const cards = groups.map((group,index) => {
     const total = tempBank(group).questions.length;
     const progress = group.completed_at ? "已完成" : `${Math.min(group.current_index + 1,total)} / ${total}`;
-    return `<section class="card"><h2>${esc(group.source_question_title)}</h2><p>${esc(group.source_question_id === "batch" ? "批量题组" : `原题 ${group.source_question_id}`)} · ${esc(group.model)} · ${esc(formatUpdatedAt(group.updated_at))}</p><p>AI 练习 ${progress}</p><div class="grid">${button(group.completed_at ? "重练" : group.current_index ? "继续" : "练习", `temp-open:${group.id}`, "primary")}${group.completed_at ? button("查看结果", `temp-review:${group.id}`) : button("从头开始", `temp-restart:${group.id}`)}${button("删除题组", `temp-delete:${group.id}`, "destructive-action")}</div></section>`;
+    return `<section class="card"><h2>${esc(group.source_question_title)}</h2><p>${esc(group.source_question_id === "batch" ? "批量题组" : `原题 ${group.source_question_id}`)} · ${esc(group.model)} · ${esc(formatUpdatedAt(group.updated_at))}</p><p>AI 练习 ${progress}</p><div class="grid">${button(group.completed_at ? "重练" : group.current_index ? "继续" : "练习", `temp-open:${group.id}`, index===0?"primary":"secondary")}${group.completed_at ? button("查看结果", `temp-review:${group.id}`) : button("从头开始", `temp-restart:${group.id}`)}${button("删除题组", `temp-delete:${group.id}`, "destructive-action")}</div></section>`;
   }).join("");
   shell("AI 题组", groups.length ? `<div class="stack">${cards}</div>` : emptyState("暂无 AI 题组", "", {text:"查看当前错题",id:"wrong"}));
 }
@@ -1052,7 +1057,7 @@ async function tempSessionView(id: string): Promise<void> {
   const q = questions[index], state = tempState(group);
   activeTempDraft={id,index,state,type:q.type};
   let content = `<div class="type">${q.type === "single_choice" ? "单选题" : q.type === "multiple_choice" ? "多选题" : "填空题"}</div><h2 class="stem">${esc(q.stem)}</h2>`;
-  if (q.options) content += `<div class="options">${q.options.map(o => `<button class="option ${state.selection.includes(o.id) ? "selected" : ""} ${state.submitted ? (Array.isArray(q.answer) ? q.answer : [q.answer]).includes(o.id) ? "right" : state.selection.includes(o.id) ? "wrong" : "" : ""}" data-action="temp-option:${esc(o.id)}" ${state.submitted || state.pendingManual ? "disabled" : ""}><b>${esc(o.id)}</b><span>${esc(o.text)}</span></button>`).join("")}</div>`;
+  if (q.options) content += `<div class="options">${q.options.map(o => `<button class="option ${state.selection.includes(o.id) ? "selected" : ""} ${state.submitted ? (Array.isArray(q.answer) ? q.answer : [q.answer]).includes(o.id) ? "right" : state.selection.includes(o.id) ? "wrong" : "" : ""}" data-action="temp-option:${esc(o.id)}" aria-pressed="${state.selection.includes(o.id)}" ${state.submitted || state.pendingManual ? "disabled" : ""}><b>${esc(o.id)}</b><span class="option-copy"><span>${esc(o.text)}</span>${optionResult(q,o.id,state.selection.includes(o.id),state.submitted)}</span></button>`).join("")}</div>`;
   if (q.type === "blank") content += `<input id="temp-blank" class="blank" placeholder="输入答案" value="${esc(state.blank)}" ${state.submitted || state.pendingManual ? "disabled" : ""}>`;
   if (state.submitted || state.pendingManual) content += `<section class="answer-panel"><h3>${state.pendingManual ? "请自行判断" : state.correct ? "回答正确" : "回答错误"}</h3><div class="multiline"><b>正确答案：</b>${esc(answerText(q))}</div>${explanation(q)}</section>`;
   const controls = state.pendingManual
@@ -1106,7 +1111,7 @@ async function tempReviewView(id:string):Promise<void>{
   shell("AI 练习结果",`<p>${esc(group.source_question_title)} · 本组错题 ${wrong} 道，保留原练习记录和来源。</p>${wrong?button(`只重练本组 ${wrong} 道错题`,`temp-retry-wrong:${id}`,"primary"):""}${cards}`);
 }
 async function aiDraftsView():Promise<void>{
-  const drafts=await listAiDrafts();shell("待审核草稿",drafts.length?drafts.map(draft=>`<section class="card"><h2>${esc(draft.source_question_title)}</h2><p>${esc(draft.model)} · ${esc(formatUpdatedAt(draft.generated_at))}</p>${button("查看候选题",`ai-draft:${draft.id}`,"primary")}${button("丢弃草稿",`ai-discard:${draft.id}`,"destructive-action")}</section>`).join(""):emptyState("暂无待审核草稿",""));
+  const drafts=await listAiDrafts();shell("待审核草稿",drafts.length?drafts.map((draft,index)=>`<section class="card"><h2>${esc(draft.source_question_title)}</h2><p>${esc(draft.model)} · ${esc(formatUpdatedAt(draft.generated_at))}</p>${button("查看候选题",`ai-draft:${draft.id}`,index===0?"primary":"secondary")}${button("丢弃草稿",`ai-discard:${draft.id}`,"destructive-action")}</section>`).join(""):emptyState("暂无待审核草稿",""));
 }
 async function tempAction(action:string):Promise<void>{
   const route=history.state as Route;if(route.view!=="temp-session")return;
@@ -1179,12 +1184,12 @@ async function batchReviewView(id?: string): Promise<void> {
   const config = status.configured
     ? `<p>DeepSeek V4.1 Flash · Key 已保存在本机</p>${button("清除已保存配置","batch-clear-config")}`
     : `<p>DeepSeek V4.1 Flash · 未配置 Key</p>`;
-  const settings = `<details class="card ai-settings" ${status.configured ? "" : "open"}><summary>AI API 配置</summary>${config}<label>API Key<input id="batch-api-key" type="password" placeholder="${status.configured ? "填写新 Key 可替换" : "填写 DeepSeek API Key"}" autocomplete="off"></label>${button(status.configured ? "更换 API Key" : "保存 API Key","batch-save-config","primary")}</details>`;
+  const settings = `<details class="card ai-settings" ${status.configured ? "" : "open"}><summary>AI API 配置</summary>${config}<label>API Key<input id="batch-api-key" type="password" placeholder="${status.configured ? "填写新 Key 可替换" : "填写 DeepSeek API Key"}" autocomplete="off"></label>${button(status.configured ? "更换 API Key" : "保存 API Key","batch-save-config",status.configured?"secondary":"primary")}</details>`;
   if (!id) {
     const review = await buildCurrentWrongReview();
     const sourceCount=review.items.length, batches=Math.ceil(sourceCount / SOURCES_PER_BATCH);
     const body = sourceCount
-      ? `<section class="card"><h2>选择本次回炉原题</h2><p>当前错题 ${sourceCount} 道。每批最多 ${SOURCES_PER_BATCH} 道原题，每次最多请求 ${MAX_SOURCES_PER_RUN} 道，只有格式通过的批次可保存。</p><label>选择前 N 道<input id="batch-source-count" type="number" min="1" max="${sourceCount}" value="${Math.min(12,sourceCount)}"></label>${button("选择前 N 道","batch-select-first")}${button("清空选择","batch-select-none")}<div class="batch-source-list">${review.items.map(item=>{const key=sourceKey(item.bank.id,item.question.id);return `<label><input type="checkbox" data-batch-source="${esc(key)}" ${batchSelectedSources.has(key)?"checked":""}>${esc(item.bank.title)} · ${esc(questionLead(item.question))}</label>`;}).join("")}</div><p id="batch-selection-summary"></p><p>${billingNotice} 已生成的原题再次选入新任务，仍会重新请求。</p>${button("确认创建并开始生成","batch-create","primary")}</section>`
+      ? `<section class="card"><h2>选择本次回炉原题</h2><p>当前错题 ${sourceCount} 道。每批最多 ${SOURCES_PER_BATCH} 道原题，每次最多请求 ${MAX_SOURCES_PER_RUN} 道，只有格式通过的批次可保存。</p><label>选择前 N 道<input id="batch-source-count" type="number" min="1" max="${sourceCount}" value="${Math.min(12,sourceCount)}"></label>${button("选择前 N 道","batch-select-first")}${button("清空选择","batch-select-none")}<div class="batch-source-list">${review.items.map(item=>{const key=sourceKey(item.bank.id,item.question.id);return `<label><input type="checkbox" data-batch-source="${esc(key)}" ${batchSelectedSources.has(key)?"checked":""}>${esc(item.bank.title)} · ${esc(questionLead(item.question))}</label>`;}).join("")}</div><p id="batch-selection-summary"></p><p>${billingNotice} 已生成的原题再次选入新任务，仍会重新请求。</p>${button("确认创建并开始生成","batch-create",status.configured?"primary":"secondary")}</section>`
       : emptyState("暂无当前错题","",{text:"返回当前错题",id:"wrong"});
     shell("批量 AI 回炉",settings+body);
     const inputs=[...app.querySelectorAll<HTMLInputElement>("[data-batch-source]")];
@@ -1209,7 +1214,7 @@ async function batchReviewView(id?: string): Promise<void> {
     return `<section class="card"><h3>第 ${index+1} 批 · ${batch.sourceKeys.length} 道原题 · ${label}</h3><p>格式通过 ${Object.keys(batch.banks).length} / ${batch.sourceKeys.length} 道原题</p>${batch.error?`<p class="message error">${esc(batch.error)}</p>`:""}${preview?`<details><summary>查看候选题</summary>${preview}</details>`:""}${controls}</section>`;
   }).join("");
   const unsaved=ready.filter(b=>!b.savedGroupId).length;
-  const controls=`${!running && modelMatch && (pending.length||failed.length) ? button("继续生成","batch-run","primary") : ""}${running ? `<p role="status">正在生成；格式通过的批次会保留。</p>${button("取消本次生成","batch-cancel")}` : ""}${unsaved && !running ? `<p>题目与答案仍需人工核对；AI 题组不会加入正式题库。</p>${button(`保存并练习（${unsaved} 批）`,"batch-save-ready","primary")}` : ""}${saved.length ? button("AI 题组","temp-groups") : ""}${!running ? button("删除批量任务","batch-delete","destructive-action") : ""}`;
+  const controls=`${!running && modelMatch && (pending.length||failed.length) ? button("继续生成","batch-run",unsaved?"secondary":status.configured?"primary":"secondary") : ""}${running ? `<p role="status">正在生成；格式通过的批次会保留。</p>${button("取消本次生成","batch-cancel")}` : ""}${unsaved && !running ? `<p>题目与答案仍需人工核对；AI 题组不会加入正式题库。</p>${button(`保存并练习（${unsaved} 批）`,"batch-save-ready",status.configured?"primary":"secondary")}` : ""}${saved.length ? button("AI 题组","temp-groups") : ""}${!running ? button("删除批量任务","batch-delete","destructive-action") : ""}`;
   const warning=!status.configured ? `<p class="message error">请先填写 DeepSeek API Key。</p>` : !modelMatch ? `<p class="message error">此旧任务使用 ${esc(job.model)}；格式通过批次仍可保存。未生成的错题请创建新的 DeepSeek 批量任务。</p>${button("新建批量任务","batch-new")}` : "";
   shell("批量 AI 回炉",`<section class="card"><h2>任务进度</h2><p>${batches.length} 批 · 格式通过 ${ready.length} · 已保存 ${saved.length} · 失败 ${failed.length} · 待生成 ${pending.length}</p><p>本轮上限 ${MAX_SOURCES_PER_RUN} 道原题</p><p>${billingNotice}</p>${warning}${controls}</section>${settings}<div class="stack">${list}</div>`);
 }
@@ -1349,13 +1354,13 @@ async function aiReviewView(questionId: string): Promise<void> {
   const config = status.configured
     ? `<p class="ai-config-status">DeepSeek V4.1 Flash · Key 已保存在本机</p>${button("清除已保存配置", "ai-clear-config")}`
     : `<p class="ai-config-status">DeepSeek V4.1 Flash · 未配置 Key</p>`;
-  const settings = `<details class="card ai-settings" ${status.configured ? "" : "open"}><summary>AI API 配置</summary>${config}<label>API Key<input id="ai-api-key" type="password" placeholder="${status.configured ? "填写新 Key 可替换" : "填写 DeepSeek API Key"}" autocomplete="off"></label>${button(status.configured ? "更换 API Key" : "保存 API Key", "ai-save-config", "primary")}</details>`;
+  const settings = `<details class="card ai-settings" ${status.configured ? "" : "open"}><summary>AI API 配置</summary>${config}<label>API Key<input id="ai-api-key" type="password" placeholder="${status.configured ? "填写新 Key 可替换" : "填写 DeepSeek API Key"}" autocomplete="off"></label>${button(status.configured ? "更换 API Key" : "保存 API Key", "ai-save-config", status.configured||preview?"secondary":"primary")}</details>`;
   const result = preview
     ? `<section class="ai-preview"><h2>草稿 · 格式通过 · 待核对${preview.draftId?"":" · 未保存"}</h2><p>生成于 ${esc(preview.generatedAt)} · ${esc(preview.model)} · 源自原题 ${esc(original.id)}</p>${preview.bank.questions.map((q, index) => `<section class="card"><h3>第 ${index + 1} 题</h3>${reviewQuestionPreview(q)}</section>`).join("")}<p>题目与答案仍需人工核对；AI 题组不会加入正式题库。</p>${preview.draftId?`${button("保存并练习", "ai-save-group", "primary")}${button("丢弃此草稿",`ai-discard:${preview.draftId}`,"destructive-action")}${button("草稿列表","ai-drafts")}`:""}</section>`
     : "";
   const controls = pendingAiPersistence?`${button("重试保存格式通过草稿","ai-retry-persist","primary")}${button("丢弃未保存结果","ai-discard-unsaved","destructive-action")}`:pending
     ? `<p role="status">正在生成，请稍候…</p>${button("取消生成", "ai-cancel")}`
-    : button(preview ? "重新生成" : "生成 2 题", "ai-generate", "primary");
+    : button(preview ? "重新生成" : "生成 2 题", "ai-generate", preview||!status.configured?"secondary":"primary");
   shell("AI 回炉", `<section class="card"><span class="type">${questionTypeLabel(original)}</span><h2 class="stem">${esc(questionLead(original))}</h2>${row?"":"<p>原题已删除，草稿和来源快照仍保留。</p>"}</section>${settings}<section class="card"><p>${billingNotice} 重新生成会再次收费，旧草稿仍保留。</p>${controls}<div id="message" class="message ${aiReviewError ? "error" : ""}" role="alert">${esc(aiReviewError)}</div></section>${result}`);
 }
 

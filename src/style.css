@@ -267,3 +267,38 @@ main:has(.form-bottom-actions){padding-bottom:calc(132px + env(safe-area-inset-b
 .home-session-summary{margin:7px 2px 0;color:#275d4b}
 .home-main .stack>button{min-width:0;width:100%;white-space:normal}
 .option-help{margin:0 0 10px}
+
+/* 0.1.12 UI review: hierarchy, compact setup and accessible results. */
+.secondary{background:transparent;border:1px solid #d9dfd8;box-shadow:none;color:#275d4b}
+.destructive-action{border:1px solid #edcbc6;background:#fff1f0;color:#a33;box-shadow:none}
+.home-summary{font-size:13px;gap:5px 14px;color:#6a6a60;margin-bottom:22px}
+.home-study{margin:0 0 22px}.home-study>button{width:100%}
+.home-session-summary{margin:8px 2px 0;font-size:14px}
+.home-recent-preset{background:transparent;box-shadow:none;border-top:1px solid #e4e0d6;border-bottom:1px solid #e4e0d6;border-radius:0;padding:12px 0;margin:0 0 18px}
+.home-recent-preset b{white-space:normal;overflow-wrap:anywhere}
+.home-recent-preset button{min-height:48px;background:transparent;box-shadow:none;color:#275d4b}
+.home-shortcuts{margin-bottom:18px}
+.home-nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 12px}
+.home-nav button{min-height:48px;padding:10px 2px;text-align:left;border:0;border-radius:8px;font-weight:550;overflow-wrap:anywhere}
+.home-ai{margin-top:18px;padding-top:4px;border-top:1px solid #e4e0d6}
+.home-ai h2{margin:8px 0;color:#666;font-size:14px}
+.setup-types{margin-bottom:16px}.setup-types h2{margin:0 0 2px}
+.practice-setup h2{font-size:19px;margin:0 0 12px}
+.setup-controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;align-items:end}
+.setup-controls label{margin:0}.setup-controls input,.setup-controls select{display:block;width:100%;min-width:0;height:48px;font:inherit;border:1px solid #ccc;border-radius:10px;background:#fff;color:#222;padding:8px 10px;margin-top:6px}
+.preset-save summary,.stats-rules summary,.ai-settings summary{min-height:48px;padding:12px 0;cursor:pointer;line-height:1.5}
+.preset-save-body{grid-template-columns:1fr}.preset-save-body input,.preset-save-body button{min-height:48px}
+.stats-rules{margin-top:20px;border-top:1px solid #e4e0d6;color:#666}
+.stats-rules .list-help{margin:0 0 12px}
+.question-more{min-width:0}.question-more summary{min-height:48px;padding:10px 12px;border:1px solid #e4e0d6;border-radius:10px;color:#666;background:#fff;cursor:pointer;line-height:1.5}
+.question-more[open]{flex:1 0 100%}.question-more[open] summary{width:max-content;max-width:100%}
+.question-more-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;padding-top:8px;border-top:1px solid #e4e0d6}
+.question-more-actions button{min-height:48px;border:1px solid #e4e0d6;border-radius:10px;padding:10px 12px}
+.question-more-actions button:first-child{color:#666}.question-more-actions .destructive-action{color:#a33;border-color:#edcbc6;background:#fff1f0}
+.option-copy{display:grid;gap:6px;min-width:0;flex:1}
+.option-result{display:block;color:#275d4b;font-size:13px;font-weight:700;line-height:1.4;white-space:normal}
+.option.wrong .option-result{color:#943a32}.option:disabled{opacity:1}.option:disabled.excluded{filter:none}.option:disabled.excluded span{text-decoration:none}
+.review-preview-option{align-items:start}.review-preview-option .option-result{font-size:12px}
+.icon{width:48px;height:48px}.header-action,.directory-search-actions button,.directory-jump button{min-height:48px}
+.directory-search input,.directory-jump input{height:48px}
+@media(max-width:360px){.home-nav{column-gap:8px}.home-summary{gap:5px 12px}.question-actions{gap:6px}.practice-setup{padding:14px}.setup-controls{grid-template-columns:1fr}}
