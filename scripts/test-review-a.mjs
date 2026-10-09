@@ -215,25 +215,25 @@ if (ui) {
       assert.match(await page.locator('.home-summary').innerText(), /背诵 2/);
       await action('scope').click();
       await action('scope-bank:review-a').click();
-      await textHas('.scope-bottom', '可刷 2');
-      assert.match(await page.locator('.scope-bottom').innerText(), /可刷 2 题 · 可背 2 项/);
+      await textHas('.scope-bottom', '刷题 2');
+      assert.match(await page.locator('.scope-bottom').innerText(), /刷题 2 · 背诵 2/);
       await action('scope-next').click();
-      await page.locator('.scope-selection-summary').waitFor();
-      assert.match(await page.locator('.scope-selection-summary').innerText(), /可刷 2 题 · 可背 2 项/);
+      await page.locator('[data-brush-count="2"]').waitFor();
+      assert.equal(await page.locator('[data-memo-count="2"]').count(), 1);
       await action('start-scope:sequential').click();
       await page.locator('.quiz').waitFor();
       assert.equal(JSON.parse((await d.latestSession()).question_ids_json).length, 2);
       // Disabling multi affects both scope and mode, not total content.
-      await route({ view: 'home' }); await action('filter-type:multiple_choice').click();
+      await route({ view: 'choose',nodeIds:[(await d.getQuestions())[0].node_id] }); await action('filter-type:multiple_choice').click();
+      await page.locator('[data-brush-count="1"]').waitFor(); await route({view:'home'});
       await textHas('.home-summary', '可刷 1');
       assert.match(await page.locator('.home-summary').innerText(), /可刷 1/);
       await action('scope').click(); await action('scope-bank:review-a').click();
-      await textHas('.scope-bottom', '可刷 1');
-      assert.match(await page.locator('.scope-bottom').innerText(), /可刷 1/);
+      await textHas('.scope-bottom', '刷题 1');
+      assert.match(await page.locator('.scope-bottom').innerText(), /刷题 1/);
       await action('scope-next').click();
-      await page.locator('.scope-selection-summary').waitFor();
-      assert.match(await page.locator('.scope-selection-summary').innerText(), /可刷 1/);
-      await route({ view: 'home' }); await action('filter-type:multiple_choice').click();
+      await page.locator('[data-brush-count="1"]').waitFor();
+      await action('filter-type:multiple_choice').click(); await page.locator('[data-brush-count="2"]').waitFor(); await route({view:'home'});
       await textHas('.home-summary', '可刷 2');
     });
     await check('U02 browser: wrong semantics in list, empty state and stats', async () => {
@@ -291,8 +291,8 @@ if (ui) {
         if (state === 'memo') {
           assert.match(await page.locator('.home-summary').innerText(), /总 2/);
           await action('scope').click(); await action('scope-bank:review-a').click(); await action('scope-next').click();
-          await page.locator('.scope-selection-summary').waitFor();
-          assert.match(await page.locator('.scope-selection-summary').innerText(), /可刷 0 题 · 可背 2 项/);
+          await page.locator('[data-brush-count="0"]').waitFor();
+          assert.equal(await page.locator('[data-memo-count="2"]').count(), 1);
           await action('start-scope:memorization').click(); await page.locator('.quiz').waitFor();
           assert.equal(JSON.parse((await d.latestSession()).question_ids_json).length, 2);
           await route({ view: 'home' });

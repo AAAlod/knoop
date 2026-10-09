@@ -267,7 +267,7 @@ async function renderRoute(route: Route): Promise<void> {
 async function navigate(route: Route, replace = false): Promise<void> {
   await studyDone;
   await flushDrafts();
-  if(pendingAiPersistence)throw new Error("已校验候选尚未保存，请重试保存或明确丢弃后离开");
+  if(pendingAiPersistence)throw new Error("格式通过候选尚未保存，请重试保存或明确丢弃后离开");
   if (replace) history.replaceState(route, "");
   else history.pushState(route, "");
   await renderRoute(route);
@@ -299,20 +299,19 @@ function sessionSummary(session: SessionRow): string {
 }
 
 async function home() {
+  practiceSetup = null;
   activeSession = null; activeRows = []; selection.clear(); excludedOptions.clear(); blankValue = ""; quickMode = false; pageState = {};
   selectedScopeNodes.clear(); scopeNodesCache = []; scopeContentNodeIds.clear();
   const resume = await latestSession(); const summary = await librarySummary([...enabledBrushTypes]); const pendingReviews = (await reviewQuestions()).length; const tempGroupCount = (await listTempGroups()).length; const previousBatchJob = await latestBatchJob();
   const pendingDraftCount=(await listAiDrafts()).length;
   const recent = scopePresets.find(p=>p.id===recentPresetId());
   const recentCard = recent ? `<section class="home-recent-preset"><div><small>最近使用</small><b>${esc(recent.name)}</b><span>${esc(presetSummary(recent))}</span></div><button type="button" data-action="start-preset:${esc(recent.id)}">开始</button></section>` : "";
-  const filters = brushTypes.map(type => `<button class="type-filter ${enabledBrushTypes.has(type)?"active":""}" data-action="filter-type:${type}" aria-pressed="${enabledBrushTypes.has(type)}">${brushLabels[type]}</button>`).join("");
   app.innerHTML = `<main class="home-main"><div class="home-heading"><h1>Knoop</h1></div><div class="home-summary"><span>题库 ${summary.banks}</span><span>总 ${summary.totalContent}</span><span>可刷 ${summary.questions}</span><span>背诵 ${summary.memorization}</span></div>
     <section class="home-group home-study"><h2 class="section-title">开始学习</h2><div class="stack">
       ${resume ? `<div class="home-resume">${button("继续", `resume:${resume.id}`, "primary")}<p class="home-session-summary">${esc(sessionSummary(resume))}</p></div>` : ""}
       ${resume ? button("未完成","sessions") : ""}
       ${summary.banks ? button("新练习", "scope", resume ? "" : "primary") : button("导入题库", "import", resume ? "" : "primary")}
     </div></section>
-    <div class="type-filter-row"><span>刷题题型</span><div class="type-filter-options">${filters}</div></div>
     <section class="home-group"><h2 class="section-title">常用练习</h2>${recentCard}<div class="stack">
       ${button("练习方案", "presets")}
     </div></section>
@@ -515,7 +514,7 @@ async function scopeView(focusAction = "") {
   const memorizationCount = selectedRows.filter(q => q.type === "memorization").length;
   const allExpanded = collapsibleIds.size > 0 && [...collapsibleIds].every(id => !collapsedScopeNodes.has(id));
   const foldAll = collapsibleIds.size ? `<button class="header-symbol" data-action="${allExpanded?"scope-collapse-all":"scope-expand-all"}" aria-label="${allExpanded?"全部折叠":"全部展开"}" title="${allExpanded?"全部折叠":"全部展开"}">${chevronIcon(allExpanded)}</button>` : "";
-  shell("选择范围", banks.length ? `${banks.map(renderBank).join("")}<div class="scope-bottom"><div><b>${selectedCount}</b> 个范围 · 可刷 ${brushCount} 题 · 可背 ${memorizationCount} 项</div><button class="primary" data-action="scope-next" ${selectedCount ? "" : "disabled"}>下一步</button></div>` : `${emptyState("还没有题库","",{text:"去导入",id:"import"})}`, true, foldAll);
+  shell("选择范围", banks.length ? `${banks.map(renderBank).join("")}<div class="scope-bottom"><div>刷题 ${brushCount} · 背诵 ${memorizationCount}</div><button class="primary" data-action="scope-next" ${selectedCount ? "" : "disabled"}>下一步</button></div>` : `${emptyState("还没有题库","",{text:"去导入",id:"import"})}`, true, foldAll);
   for (const input of document.querySelectorAll<HTMLInputElement>("[data-scope-check]")) { const id = input.dataset.scopeCheck!; const state = stateFor(coverageIds(id)); input.indeterminate = state.partial; }
   for (const input of document.querySelectorAll<HTMLInputElement>("[data-bank-check]")) {
     const bankId=input.dataset.bankCheck!; const roots=(children.get(null)??[]).filter(n=>n.bank_id===bankId);
@@ -565,25 +564,22 @@ function validPresetTypes(types: BrushType[]): BrushType[] { return types.filter
 async function saveScopePreset(nodeIds: string[]): Promise<void> {
   const name=(document.querySelector<HTMLInputElement>("#preset-name")?.value??"").trim();
   if(!name){notify("请输入练习方案名称");return;}
-  const mode=(document.querySelector<HTMLSelectElement>("#preset-mode")?.value??"random") as PresetMode;
+  const mode=(document.querySelector<HTMLSelectElement>("#practice-order")?.value??"sequential") as PresetMode;
   if(mode!=="sequential"&&mode!=="random"){notify("组题方式无效");return;}
   const types=validPresetTypes([...enabledBrushTypes]);
   if(!types.length){notify("请至少启用一种刷题题型");return;}
-  const rawCount=Number(document.querySelector<HTMLInputElement>("#preset-count")?.value||0);
-  const count=mode==="random"?Math.max(1,Math.trunc(rawCount||1)):undefined;
+  const count=mode==="random"?setupCount("#random-count"):undefined;
+  if(mode==="random"&&count===undefined)return;
   const nodes=await getNodes(), questions=await getQuestions(), contentNodes=new Set(questions.map(q=>q.node_id));
   const ranges=compressPresetRanges([...new Set(nodeIds)],nodes,contentNodes); if(!ranges.length){notify("当前范围没有可保存的有效题目节点");return;}
   const stamp=new Date().toISOString();
   scopePresets=[...scopePresets,{id:presetId(),name,ranges,types,mode,count,createdAt:stamp,updatedAt:stamp}];
   persistScopePresets();
   const nameInput=document.querySelector<HTMLInputElement>("#preset-name");
-  const modeSelect=document.querySelector<HTMLSelectElement>("#preset-mode");
-  const countInput=document.querySelector<HTMLInputElement>("#preset-count");
   if(nameInput)nameInput.value="";
-  if(modeSelect)modeSelect.value="random";
-  if(countInput)countInput.value=countInput.dataset.defaultValue??countInput.value;
   const details=document.querySelector<HTMLDetailsElement>("details.preset-save");
   if(details)details.open=false;
+  capturePracticeSetup();
   notify(`已保存练习方案：${name}`,"ok");
 }
 async function startPresetById(id:string): Promise<void> {
@@ -604,30 +600,52 @@ async function presetsView(): Promise<void> {
   shell("练习方案",scopePresets.length?`<div class="preset-list">${cards}</div>`:`${emptyState("暂无练习方案","",{text:"去学习",id:"scope"})}`);
 }
 
-async function chooseScope(nodeIds: string[]) {
+type PracticeSetup = {key:string;order:string;count:string;memoOrder:string;memoCount:string;name:string;saveOpen:boolean};
+let practiceSetup:PracticeSetup|null=null;
+function capturePracticeSetup():void {
+  if(!practiceSetup)return;
+  const value=(selector:string,fallback:string)=>document.querySelector<HTMLInputElement|HTMLSelectElement>(selector)?.value??fallback;
+  practiceSetup={...practiceSetup,order:value("#practice-order",practiceSetup.order),count:value("#random-count",practiceSetup.count),memoOrder:value("#memorization-order",practiceSetup.memoOrder),memoCount:value("#memorization-random-count",practiceSetup.memoCount),name:value("#preset-name",practiceSetup.name),saveOpen:document.querySelector<HTMLDetailsElement>(".preset-save")?.open??false};
+}
+function setupCount(selector:string):number|undefined {
+  const input=document.querySelector<HTMLInputElement>(selector);
+  if(!input||!input.checkValidity()){input?.reportValidity();return;}
+  const count=Number(input.value);
+  if(!Number.isSafeInteger(count)||count<1){notify("请输入范围内的整数数量");input.focus();return;}
+  return count;
+}
+async function chooseScope(nodeIds: string[],focusAction="") {
   if (!nodeIds.length) { notify("请至少选择一个范围"); return navigate({view:"scope"}, true); }
   const rows = await questionsForScope(nodeIds);
   const answerable = rows.filter(isEnabledBrush); const memorization = rows.filter(q=>q.type==="memorization");
-  const activeNames = brushTypes.filter(t=>enabledBrushTypes.has(t)).map(t=>brushLabels[t]).join(" / ") || "无";
-  const brushCard = answerable.length ? `<section class="card"><h2>可刷 ${answerable.length} 题</h2><p>题型：${activeNames}</p>
-    ${button("顺序刷题","start-scope:sequential","primary")}
-    <label>随机题数<input id="random-count" type="number" min="1" max="${answerable.length}" value="${Math.min(10,answerable.length)}"></label>
-    ${button("随机刷题","start-scope:random")}
-    ${button("题目目录","open-directory:brush")}
-    <details class="preset-save"><summary>保存为练习方案</summary><div class="preset-save-body">
-      <label>名称<input id="preset-name" type="text" maxlength="40" placeholder="例如：公卫三科 · 200 单选"></label>
-      <label>方式<select id="preset-mode"><option value="random" selected>随机</option><option value="sequential">顺序</option></select></label>
-      <label>随机题数<input id="preset-count" type="number" min="1" value="${Math.min(200,answerable.length)}" data-default-value="${Math.min(200,answerable.length)}"></label>
+  const key=JSON.stringify([...nodeIds].sort());
+  if(practiceSetup?.key!==key)practiceSetup={key,order:"sequential",count:String(Math.min(10,answerable.length)),memoOrder:"sequential",memoCount:String(Math.min(10,memorization.length)),name:"",saveOpen:false};
+  const setup=practiceSetup!;
+  if(answerable.length)setup.count=String(Math.min(Math.max(1,Number(setup.count)||10),answerable.length));
+  const filters=brushTypes.map(type=>`<button class="type-filter ${enabledBrushTypes.has(type)?"active":""}" data-action="filter-type:${type}" aria-pressed="${enabledBrushTypes.has(type)}">${brushLabels[type]}</button>`).join("");
+  const orderOptions=(order:string)=>`<option value="sequential" ${order==="sequential"?"selected":""}>顺序</option><option value="random" ${order==="random"?"selected":""}>随机</option>`;
+  const brushCard = `<section class="card practice-setup"><h2 data-brush-count="${answerable.length}">刷题 ${answerable.length}</h2>${answerable.length?`
+    <div class="setup-controls"><label>方式<select id="practice-order">${orderOptions(setup.order)}</select></label>
+    <label id="practice-count-label" ${setup.order==="random"?"":"hidden"}>题数<input id="random-count" type="number" min="1" max="${answerable.length}" value="${esc(setup.count)}"></label></div>
+    ${button("开始练习",`start-scope:${setup.order}`,"primary")}
+    ${button("目录","open-directory:brush","secondary")}
+    <details class="preset-save" ${setup.saveOpen?"open":""}><summary>保存方案</summary><div class="preset-save-body">
+      <label>名称<input id="preset-name" type="text" maxlength="40" placeholder="练习方案名称" value="${esc(setup.name)}"></label>
       <button data-action="save-scope-preset">保存</button>
     </div></details>
+  `:button("调整题型","adjust-types")}</section>`;
+  const memoCard = memorization.length ? `<section class="card practice-setup"><h2 data-memo-count="${memorization.length}">背诵 ${memorization.length}</h2>
+    <div class="setup-controls"><label>方式<select id="memorization-order">${orderOptions(setup.memoOrder)}</select></label>
+    <label id="memorization-count-label" ${setup.memoOrder==="random"?"":"hidden"}>材料数<input id="memorization-random-count" type="number" min="1" max="${memorization.length}" value="${esc(setup.memoCount)}"></label></div>
+    ${button("开始背诵",setup.memoOrder==="random"?"start-scope:memorization-random":"start-scope:memorization",answerable.length?"secondary":"primary")}
+    ${button("目录","open-directory:memorization","secondary")}
   </section>` : "";
-  const memoCard = memorization.length ? `<section class="card"><h2>背诵 ${memorization.length} 项</h2>
-    ${button("顺序背诵","start-scope:memorization","primary")}
-    <label>随机材料数<input id="memorization-random-count" type="number" min="1" max="${memorization.length}" value="${Math.min(10,memorization.length)}"></label>
-    ${button("随机背诵","start-scope:memorization-random")}
-    ${button("背诵目录","open-directory:memorization")}
-  </section>` : "";
-  shell("选择模式", `<p class="scope-selection-summary">当前范围：可刷 ${answerable.length} 题 · 可背 ${memorization.length} 项</p>` + (brushCard+memoCard || `${emptyState("当前范围没有可用内容","请调整题型筛选或重新选择范围。",{text:"重新选择范围",id:"scope"})}`));
+  shell("选择模式",`<section class="setup-types type-filter-row"><h2 class="section-title">题型</h2><div class="type-filter-options">${filters}</div></section>${brushCard}${memoCard}`);
+  for(const kind of ["practice","memorization"]){
+    const order=document.querySelector<HTMLSelectElement>(`#${kind}-order`);
+    order?.addEventListener("change",()=>{const random=order.value==="random";document.querySelector<HTMLElement>(`#${kind}-count-label`)!.hidden=!random;const start=document.querySelector<HTMLButtonElement>(kind==="practice"?'[data-action="start-scope:sequential"],[data-action="start-scope:random"]':'[data-action="start-scope:memorization"],[data-action="start-scope:memorization-random"]')!;start.dataset.action=kind==="practice"?`start-scope:${order.value}`:random?"start-scope:memorization-random":"start-scope:memorization";capturePracticeSetup();});
+  }
+  if(focusAction)app.querySelector<HTMLButtonElement>(`[data-action="${CSS.escape(focusAction)}"]`)?.focus({preventScroll:true});
 }
 
 async function startScope(mode:string,nodeIds:string[],count?:number) {
@@ -669,7 +687,7 @@ function directoryMatchLocation(q:QuestionInput,query:string):string {
 }
 function directoryListHtml(entries:Array<{row:QuestionRow;index:number;question?:QuestionInput}>,sessionId?:string,currentIndex=-1,query=""):string {
   if(!entries.length)return `${emptyState("没有匹配内容","")}`;
-  return entries.map(({row:r,index:i,question})=>{const q=question??parseQuestion(r), location=directoryMatchLocation(q,query);return `<button class="directory-item ${i===currentIndex?"current":""}" data-action="${sessionId?`jump-session:${i}`:`start-directory:${i}`}"><b>${i+1}</b><span class="type">${questionTypeLabel(q)}</span><span class="directory-copy"><span class="directory-text">${esc(questionLead(q))}</span>${location?`<small class="directory-match">命中${esc(location)}</small>`:""}</span></button>`}).join("");
+  return entries.map(({row:r,index:i,question})=>{const q=question??parseQuestion(r), location=directoryMatchLocation(q,query);return `<button class="directory-item ${i===currentIndex?"current":""}" aria-label="${sessionId?"跳至第":"从第"}${i+1}${sessionId?"题":"题开始"}：${esc(questionLead(q))}" data-action="${sessionId?`jump-session:${i}`:`start-directory:${i}`}"><b>${i+1}</b><span class="type">${questionTypeLabel(q)}</span><span class="directory-copy"><span class="directory-text">${esc(questionLead(q))}</span>${location?`<small class="directory-match">命中${esc(location)}</small>`:""}</span></button>`}).join("");
 }
 function directorySearchActionsHtml(route: Extract<Route,{view:"directory"}>, count:number):string {
   if(route.sessionId || !route.query?.trim() || !count)return "";
@@ -677,15 +695,13 @@ function directorySearchActionsHtml(route: Extract<Route,{view:"directory"}>, co
   return `<div class="directory-search-actions"><button class="primary" data-action="start-directory-search:sequential">顺序${noun==="背诵"?"背诵":"练习"}（${count}）</button><button data-action="start-directory-search:random">随机${noun==="背诵"?"背诵":"练习"}</button></div>`;
 }
 async function directoryView(route: Extract<Route,{view:"directory"}>) {
-  let rows: QuestionRow[]=[]; let title="题目目录"; let currentIndex=-1;
+  let rows: QuestionRow[]=[]; let title=route.sessionId?"跳至此题":"从此题开始"; let currentIndex=-1;
   if(route.sessionId){
     const session=await sessionById(route.sessionId); if(!session){notify("学习进度不存在");return goBack();}
     const ids=JSON.parse(session.question_ids_json) as string[]; const found=await getQuestions(ids); const byId=new Map(found.map(r=>[r.id,r]));
     rows=ids.map(id=>byId.get(id)).filter(Boolean) as QuestionRow[]; currentIndex=session.current_index;
-    title=session.mode==="memorization"?"背诵目录":"题目目录";
   } else {
     const all=await questionsForScope(route.nodeIds??[]); rows=route.kind==="memorization"?all.filter(q=>q.type==="memorization"):all.filter(isEnabledBrush);
-    title=route.kind==="memorization"?"背诵目录":"题目目录";
   }
   if(!rows.length){return shell(title,`${emptyState("没有可定位的内容","请重新选择学习范围。",{text:"去学习",id:"scope"})}`);}
   const query=route.query??"",index=indexDirectory(rows);let entries=searchDirectory(index,query),limit=100,timer=0,currentQuery=query;
@@ -1149,7 +1165,7 @@ let batchCancelRequested = false;
 let batchSavingReady = false;
 let batchStarting=false,batchCreating=false;
 let batchSelectedSources=new Set<string>();
-const billingNotice="每道原题调用一次 AI API，可能收费。取消只停止本地请求，不能保证服务商不计费；失败重试会再次发送请求。已校验的原题结果会保留。";
+const billingNotice="每道原题调用一次 AI API，可能收费。取消只停止本地请求，不能保证服务商不计费；失败重试会再次发送请求。格式通过的原题结果会保留。";
 
 function batchRouteId(): string | null {
   const route = history.state as Route;
@@ -1168,7 +1184,7 @@ async function batchReviewView(id?: string): Promise<void> {
     const review = await buildCurrentWrongReview();
     const sourceCount=review.items.length, batches=Math.ceil(sourceCount / SOURCES_PER_BATCH);
     const body = sourceCount
-      ? `<section class="card"><h2>选择本次回炉原题</h2><p>当前错题 ${sourceCount} 道。每批最多 ${SOURCES_PER_BATCH} 道原题，每次最多请求 ${MAX_SOURCES_PER_RUN} 道，只有完整校验的批次可保存。</p><label>选择前 N 道<input id="batch-source-count" type="number" min="1" max="${sourceCount}" value="${Math.min(12,sourceCount)}"></label>${button("选择前 N 道","batch-select-first")}${button("清空选择","batch-select-none")}<div class="batch-source-list">${review.items.map(item=>{const key=sourceKey(item.bank.id,item.question.id);return `<label><input type="checkbox" data-batch-source="${esc(key)}" ${batchSelectedSources.has(key)?"checked":""}>${esc(item.bank.title)} · ${esc(questionLead(item.question))}</label>`;}).join("")}</div><p id="batch-selection-summary"></p><p>${billingNotice} 已生成的原题再次选入新任务，仍会重新请求。</p>${button("确认创建并开始生成","batch-create","primary")}</section>`
+      ? `<section class="card"><h2>选择本次回炉原题</h2><p>当前错题 ${sourceCount} 道。每批最多 ${SOURCES_PER_BATCH} 道原题，每次最多请求 ${MAX_SOURCES_PER_RUN} 道，只有格式通过的批次可保存。</p><label>选择前 N 道<input id="batch-source-count" type="number" min="1" max="${sourceCount}" value="${Math.min(12,sourceCount)}"></label>${button("选择前 N 道","batch-select-first")}${button("清空选择","batch-select-none")}<div class="batch-source-list">${review.items.map(item=>{const key=sourceKey(item.bank.id,item.question.id);return `<label><input type="checkbox" data-batch-source="${esc(key)}" ${batchSelectedSources.has(key)?"checked":""}>${esc(item.bank.title)} · ${esc(questionLead(item.question))}</label>`;}).join("")}</div><p id="batch-selection-summary"></p><p>${billingNotice} 已生成的原题再次选入新任务，仍会重新请求。</p>${button("确认创建并开始生成","batch-create","primary")}</section>`
       : emptyState("暂无当前错题","",{text:"返回当前错题",id:"wrong"});
     shell("批量 AI 回炉",settings+body);
     const inputs=[...app.querySelectorAll<HTMLInputElement>("[data-batch-source]")];
@@ -1187,15 +1203,15 @@ async function batchReviewView(id?: string): Promise<void> {
   const ready=batches.filter(b=>b.status==="ready"), saved=ready.filter(b=>!!b.savedGroupId), failed=batches.filter(b=>b.status==="failed"), pending=batches.filter(b=>b.status==="pending");
   const running=batchRunningJobId===id, modelMatch=status.configured && status.model===job.model;
   const list=batches.map((batch,index)=>{
-    const label=batch.savedGroupId?"已保存":batch.status==="ready"?"已校验":batch.status==="failed"?"失败":"待生成";
+    const label=batch.savedGroupId?"已保存":batch.status==="ready"?"格式通过 · 待核对":batch.status==="failed"?"失败":"待生成";
     const controls=batch.status==="failed" && !running ? button("重试此批",`batch-retry:${index}`) : "";
     const preview=Object.entries(batch.banks).map(([key,bank])=>`<section><h4>原题 ${esc(JSON.parse(key)[1])}</h4>${bank.questions.map((q,i)=>`<div class="card"><h4>变式 ${i+1}</h4>${reviewQuestionPreview(q)}</div>`).join("")}</section>`).join("");
-    return `<section class="card"><h3>第 ${index+1} 批 · ${batch.sourceKeys.length} 道原题 · ${label}</h3><p>已校验 ${Object.keys(batch.banks).length} / ${batch.sourceKeys.length} 道原题</p>${batch.error?`<p class="message error">${esc(batch.error)}</p>`:""}${preview?`<details><summary>查看候选题</summary>${preview}</details>`:""}${controls}</section>`;
+    return `<section class="card"><h3>第 ${index+1} 批 · ${batch.sourceKeys.length} 道原题 · ${label}</h3><p>格式通过 ${Object.keys(batch.banks).length} / ${batch.sourceKeys.length} 道原题</p>${batch.error?`<p class="message error">${esc(batch.error)}</p>`:""}${preview?`<details><summary>查看候选题</summary>${preview}</details>`:""}${controls}</section>`;
   }).join("");
   const unsaved=ready.filter(b=>!b.savedGroupId).length;
-  const controls=`${!running && modelMatch && (pending.length||failed.length) ? button("继续生成","batch-run","primary") : ""}${running ? `<p role="status">正在生成；已通过校验的批次会保留。</p>${button("取消本次生成","batch-cancel")}` : ""}${unsaved && !running ? button(`保存 ${unsaved} 个已校验批次并练习`,"batch-save-ready","primary") : ""}${saved.length ? button("AI 题组","temp-groups") : ""}${!running ? button("删除批量任务","batch-delete","destructive-action") : ""}`;
-  const warning=!status.configured ? `<p class="message error">请先填写 DeepSeek API Key。</p>` : !modelMatch ? `<p class="message error">此旧任务使用 ${esc(job.model)}；已校验批次仍可保存。未生成的错题请创建新的 DeepSeek 批量任务。</p>${button("新建批量任务","batch-new")}` : "";
-  shell("批量 AI 回炉",`<section class="card"><h2>任务进度</h2><p>${batches.length} 批 · 已校验 ${ready.length} · 已保存 ${saved.length} · 失败 ${failed.length} · 待生成 ${pending.length}</p><p>生成结果保存在本机，退出或重启后可继续。${billingNotice}</p>${warning}${controls}</section>${settings}<div class="stack">${list}</div>`);
+  const controls=`${!running && modelMatch && (pending.length||failed.length) ? button("继续生成","batch-run","primary") : ""}${running ? `<p role="status">正在生成；格式通过的批次会保留。</p>${button("取消本次生成","batch-cancel")}` : ""}${unsaved && !running ? `<p>题目与答案仍需人工核对；AI 题组不会加入正式题库。</p>${button(`保存并练习（${unsaved} 批）`,"batch-save-ready","primary")}` : ""}${saved.length ? button("AI 题组","temp-groups") : ""}${!running ? button("删除批量任务","batch-delete","destructive-action") : ""}`;
+  const warning=!status.configured ? `<p class="message error">请先填写 DeepSeek API Key。</p>` : !modelMatch ? `<p class="message error">此旧任务使用 ${esc(job.model)}；格式通过批次仍可保存。未生成的错题请创建新的 DeepSeek 批量任务。</p>${button("新建批量任务","batch-new")}` : "";
+  shell("批量 AI 回炉",`<section class="card"><h2>任务进度</h2><p>${batches.length} 批 · 格式通过 ${ready.length} · 已保存 ${saved.length} · 失败 ${failed.length} · 待生成 ${pending.length}</p><p>本轮上限 ${MAX_SOURCES_PER_RUN} 道原题</p><p>${billingNotice}</p>${warning}${controls}</section>${settings}<div class="stack">${list}</div>`);
 }
 async function saveBatchConfig(): Promise<void> {
   const route=history.state as Route; if(route.view!=="batch-review")return;
@@ -1335,12 +1351,12 @@ async function aiReviewView(questionId: string): Promise<void> {
     : `<p class="ai-config-status">DeepSeek V4.1 Flash · 未配置 Key</p>`;
   const settings = `<details class="card ai-settings" ${status.configured ? "" : "open"}><summary>AI API 配置</summary>${config}<label>API Key<input id="ai-api-key" type="password" placeholder="${status.configured ? "填写新 Key 可替换" : "填写 DeepSeek API Key"}" autocomplete="off"></label>${button(status.configured ? "更换 API Key" : "保存 API Key", "ai-save-config", "primary")}</details>`;
   const result = preview
-    ? `<section class="ai-preview"><h2>候选变式题 · ${preview.draftId?"已保存待审核草稿":"尚未保存"}</h2><p>生成于 ${esc(preview.generatedAt)} · ${esc(preview.model)} · 源自原题 ${esc(original.id)}</p>${preview.bank.questions.map((q, index) => `<section class="card"><h3>第 ${index + 1} 题</h3>${reviewQuestionPreview(q)}</section>`).join("")}<p>请人工核对题目与答案。明确保存后才作为独立AI 题组练习，不会加入正式题库。</p>${preview.draftId?`${button("保存并练习", "ai-save-group", "primary")}${button("丢弃此草稿",`ai-discard:${preview.draftId}`,"destructive-action")}${button("草稿列表","ai-drafts")}`:""}</section>`
+    ? `<section class="ai-preview"><h2>草稿 · 格式通过 · 待核对${preview.draftId?"":" · 未保存"}</h2><p>生成于 ${esc(preview.generatedAt)} · ${esc(preview.model)} · 源自原题 ${esc(original.id)}</p>${preview.bank.questions.map((q, index) => `<section class="card"><h3>第 ${index + 1} 题</h3>${reviewQuestionPreview(q)}</section>`).join("")}<p>题目与答案仍需人工核对；AI 题组不会加入正式题库。</p>${preview.draftId?`${button("保存并练习", "ai-save-group", "primary")}${button("丢弃此草稿",`ai-discard:${preview.draftId}`,"destructive-action")}${button("草稿列表","ai-drafts")}`:""}</section>`
     : "";
-  const controls = pendingAiPersistence?`${button("重试保存已校验草稿","ai-retry-persist","primary")}${button("丢弃未保存结果","ai-discard-unsaved","destructive-action")}`:pending
+  const controls = pendingAiPersistence?`${button("重试保存格式通过草稿","ai-retry-persist","primary")}${button("丢弃未保存结果","ai-discard-unsaved","destructive-action")}`:pending
     ? `<p role="status">正在生成，请稍候…</p>${button("取消生成", "ai-cancel")}`
     : button(preview ? "重新生成" : "生成 2 题", "ai-generate", "primary");
-  shell("AI 回炉", `<section class="card"><span class="type">${questionTypeLabel(original)}</span><h2 class="stem">${esc(questionLead(original))}</h2><p>${row?"本次使用这道当前错题的题目、答案、错误信息和作答统计。":"原题已删除，待审核候选和来源快照仍保留，可保存AI 练习。"}</p></section>${settings}<section class="card"><p>${billingNotice} 重新生成会再次收费，旧草稿仍保留在待审核列表。</p>${controls}<div id="message" class="message ${aiReviewError ? "error" : ""}" role="alert">${esc(aiReviewError)}</div></section>${result}`);
+  shell("AI 回炉", `<section class="card"><span class="type">${questionTypeLabel(original)}</span><h2 class="stem">${esc(questionLead(original))}</h2>${row?"":"<p>原题已删除，草稿和来源快照仍保留。</p>"}</section>${settings}<section class="card"><p>${billingNotice} 重新生成会再次收费，旧草稿仍保留。</p>${controls}<div id="message" class="message ${aiReviewError ? "error" : ""}" role="alert">${esc(aiReviewError)}</div></section>${result}`);
 }
 
 async function saveAiConfig(): Promise<void> {
@@ -1408,7 +1424,7 @@ async function generateAiReviewOnce(): Promise<void> {
     pendingAiPersistence={id:crypto.randomUUID(),questionId,source:original.question,bank,model:status.model??"",generatedAt:new Date().toISOString()};
     await persistGeneratedDraft();
   } catch (error) {
-    if (aiPendingRequestId === requestId) aiReviewError = pendingAiPersistence?"候选已校验，但本机草稿保存失败。请保持此页面并重试保存，重试保存不会请求 AI；关闭应用前未保存的结果可能丢失。":error instanceof Error ? error.message : String(error);
+    if (aiPendingRequestId === requestId) aiReviewError = pendingAiPersistence?"候选格式通过，但本机草稿保存失败。请保持此页面并重试保存，重试保存不会请求 AI；关闭应用前未保存的结果可能丢失。":error instanceof Error ? error.message : String(error);
   } finally {
     if (aiPendingRequestId === requestId) {
       aiPendingRequestId = null;
@@ -1422,7 +1438,7 @@ async function cancelAiReview(): Promise<void> {
   const questionId = aiRouteQuestionId();
   if (!requestId || !questionId) return;
   aiPendingRequestId = null;
-  aiReviewError = "已停止本地请求，不能保证服务商不计费；此前已校验草稿仍保留。";
+  aiReviewError = "已停止本地请求，不能保证服务商不计费；此前格式通过草稿仍保留。";
   await invoke("cancel_ai_review", {requestId});
   await aiReviewView(questionId);
 }
@@ -1457,7 +1473,7 @@ app.addEventListener("click",async e=>{const target=(e.target as HTMLElement).cl
     if(action==="sessions")return navigate({view:"sessions"});
     if(action==="ai-drafts")return navigate({view:"ai-drafts"});
     if(action==="ai-retry-persist")return await withStudyAction(async()=>{await persistGeneratedDraft();const id=aiRouteQuestionId();if(id)await aiReviewView(id);});
-    if(action==="ai-discard-unsaved"){if(!confirm("丢弃未保存的已校验结果？已发生的 API 费用不会退还。"))return;pendingAiPersistence=null;aiPreview=null;aiReviewError="";const id=aiRouteQuestionId();if(id)return aiReviewView(id);return;}
+    if(action==="ai-discard-unsaved"){if(!confirm("丢弃未保存的格式通过结果？已发生的 API 费用不会退还。"))return;pendingAiPersistence=null;aiPreview=null;aiReviewError="";const id=aiRouteQuestionId();if(id)return aiReviewView(id);return;}
     if(action.startsWith("ai-draft:")){const draft=await getAiDraft(action.slice(9));if(draft)return navigate({view:"ai-review",questionId:draft.source_question_id,draftId:draft.id});return;}
     if(action.startsWith("ai-discard:")){if(!confirm("丢弃此待审核草稿？已发生的 API 费用不会退还。"))return;await deleteAiDraft(action.slice(11));aiPreview=null;return navigate({view:"ai-drafts"},true);}
     if(action.startsWith("temp-review:"))return navigate({view:"temp-review",id:action.slice(12)});
@@ -1480,16 +1496,17 @@ app.addEventListener("click",async e=>{const target=(e.target as HTMLElement).cl
     if(action==="temp-groups")return navigate({view:"temp-groups"});
     if(action.startsWith("temp-open:")){const id=action.slice(10);const group=await getTempGroup(id);if(!group)return tempGroupsView();if(group.completed_at)await restartTempGroup(group);return navigate({view:"temp-session",id});}
     if(action.startsWith("temp-restart:")){const id=action.slice(13);const group=await getTempGroup(id);if(!group)return tempGroupsView();await restartTempGroup(group);return navigate({view:"temp-session",id});}
-    if(action.startsWith("temp-delete:")){const id=action.slice(12);if(!confirm("删除这个临时回炉题组及其练习进度？"))return;await deleteTempGroup(id);notify("已删除AI 题组","ok");return navigate({view:"temp-groups"},true);}
-    if(action.startsWith("filter-type:")){const type=action.slice("filter-type:".length) as BrushType;if(!brushTypes.includes(type))return;enabledBrushTypes.has(type)?enabledBrushTypes.delete(type):enabledBrushTypes.add(type);saveBrushTypes();return home();}
+    if(action.startsWith("temp-delete:")){const id=action.slice(12);if(!confirm("删除这个临时回炉题组及其练习进度？"))return;await deleteTempGroup(id);notify("已删除 AI 题组","ok");return navigate({view:"temp-groups"},true);}
+    if(action==="adjust-types"){app.querySelector<HTMLButtonElement>('.setup-types [data-action^="filter-type:"]')?.focus();return;}
+    if(action.startsWith("filter-type:")){const type=action.slice("filter-type:".length) as BrushType;if(!brushTypes.includes(type))return;capturePracticeSetup();enabledBrushTypes.has(type)?enabledBrushTypes.delete(type):enabledBrushTypes.add(type);saveBrushTypes();const route=history.state as Route;if(route.view==="choose")return chooseScope(route.nodeIds??(route.nodeId?[route.nodeId]:[]),action);return;}
     if(action==="export-error-review")return exportWrongReview();
     if(action==="batch-new"){batchSelectedSources.clear();return navigate({view:"batch-review"});}
     if(action.startsWith("batch-open:"))return navigate({view:"batch-review",id:action.slice(11)});
     if(action==="batch-save-config")return saveBatchConfig();
     if(action==="batch-clear-config"){await invoke("clear_ai_config");const route=history.state as Route;if(route.view==="batch-review")return batchReviewView(route.id);return;}
     if(action==="batch-create")return createBatchReviewJob();
-    if(action==="batch-run"){const id=batchRouteId();if(id&&confirm("继续将再次请求未成功的原题，可能收费。已校验的原题结果保留，不重新请求。确认继续？"))return runBatchReview(id);return;}
-    if(action.startsWith("batch-retry:")){const id=batchRouteId();if(id&&confirm("重试将再次发送尚未成功的原题请求，可能再次收费；已校验原题不会重新请求。确认重试？"))return runBatchReview(id,Number(action.slice(12)));return;}
+    if(action==="batch-run"){const id=batchRouteId();if(id&&confirm("继续将再次请求未成功的原题，可能收费。格式通过的原题结果保留，不重新请求。确认继续？"))return runBatchReview(id);return;}
+    if(action.startsWith("batch-retry:")){const id=batchRouteId();if(id&&confirm("重试将再次发送尚未成功的原题请求，可能再次收费；格式通过原题不会重新请求。确认重试？"))return runBatchReview(id,Number(action.slice(12)));return;}
     if(action==="batch-cancel")return cancelBatchReview();
     if(action==="batch-save-ready")return saveReadyBatches();
     if(action==="batch-delete"){const id=batchRouteId();if(!id)return;if(!confirm("删除这项批量回炉任务及未保存的候选题？已保存的AI 题组会保留。"))return;await deleteBatchJob(id);return navigate({view:"list",kind:"wrong"},true);}
@@ -1514,10 +1531,10 @@ app.addEventListener("click",async e=>{const target=(e.target as HTMLElement).cl
     if(action.startsWith("scope-bank-fold:")){const bankId=action.slice("scope-bank-fold:".length);const {children}=buildScopeTree(scopeNodesCache);const ids=scopeNodesCache.filter(n=>n.bank_id===bankId&&(children.get(n.id)?.length??0)>0).map(n=>n.id);const allCollapsed=ids.length>0&&ids.every(id=>collapsedScopeNodes.has(id));for(const id of ids)allCollapsed?collapsedScopeNodes.delete(id):collapsedScopeNodes.add(id);saveScopeCollapseState();return scopeView(action);}
     if(action.startsWith("scope-node:")){toggleScopeNode(action.slice("scope-node:".length));return scopeView(action);}
     if(action.startsWith("scope-bank:")){toggleScopeBank(action.slice("scope-bank:".length));return scopeView(action);}
-    if(action==="scope-next")return navigate({view:"choose",nodeIds:[...selectedScopeNodes]});
+    if(action==="scope-next"){practiceSetup=null;return navigate({view:"choose",nodeIds:[...selectedScopeNodes]});}
     if(action==="save-scope-preset"){const route=history.state as Route;const ids=route.view==="choose"?(route.nodeIds??(route.nodeId?[route.nodeId]:[])):[];return saveScopePreset(ids);}
-    if(action.startsWith("start-scope:")){const mode=action.slice("start-scope:".length);const route=history.state as Route;const ids=route.view==="choose"?(route.nodeIds??(route.nodeId?[route.nodeId]:[])):[];const count=mode==="random"?Number(document.querySelector<HTMLInputElement>("#random-count")?.value||10):mode==="memorization-random"?Number(document.querySelector<HTMLInputElement>("#memorization-random-count")?.value||10):undefined;return startScope(mode,ids,count);}
-    if(action.startsWith("open-directory:")){const kind=action.slice("open-directory:".length) as DirectoryKind;const route=history.state as Route;const ids=route.view==="choose"?(route.nodeIds??(route.nodeId?[route.nodeId]:[])):[];return navigate({view:"directory",nodeIds:ids,kind,query:""});}
+    if(action.startsWith("start-scope:")){const mode=action.slice("start-scope:".length);const route=history.state as Route;const ids=route.view==="choose"?(route.nodeIds??(route.nodeId?[route.nodeId]:[])):[];const random=mode==="random"||mode==="memorization-random";const count=random?setupCount(mode==="random"?"#random-count":"#memorization-random-count"):undefined;if(random&&count===undefined)return;return startScope(mode,ids,count);}
+    if(action.startsWith("open-directory:")){capturePracticeSetup();const kind=action.slice("open-directory:".length) as DirectoryKind;const route=history.state as Route;const ids=route.view==="choose"?(route.nodeIds??(route.nodeId?[route.nodeId]:[])):[];return navigate({view:"directory",nodeIds:ids,kind,query:""});}
     if(action==="session-directory"){if(!activeSession)return;return navigate({view:"directory",sessionId:activeSession.id,kind:activeSession.mode==="memorization"?"memorization":"brush",query:""});}
     if(action==="directory-go"){const route=history.state as Route;if(route.view!=="directory")return;const raw=Number(document.querySelector<HTMLInputElement>("#directory-index")?.value||0);const index=Math.trunc(raw)-1;if(index<0)return notify("请输入有效题号");if(route.sessionId){const session=await sessionById(route.sessionId);if(!session)return notify("学习进度不存在");const ids=JSON.parse(session.question_ids_json) as string[];if(index>=ids.length)return notify(`题号应在 1-${ids.length} 之间`);const saved=JSON.parse(session.state_json||"{}") as {quickMode?:boolean};quickMode=!!saved.quickMode;activeSession=session;const found=await getQuestions(ids);const byId=new Map(found.map(r=>[r.id,r]));activeRows=ids.map(id=>byId.get(id)).filter(Boolean) as QuestionRow[];selection.clear();excludedOptions.clear();blankValue="";pageState={};await saveSession(session.id,index,{quickMode});return navigate({view:"session",id:session.id});}const all=await questionsForScope(route.nodeIds??[]);const rows=route.kind==="memorization"?all.filter(q=>q.type==="memorization"):all.filter(isEnabledBrush);if(index>=rows.length)return notify(`题号应在 1-${rows.length} 之间`);const mode=route.kind==="memorization"?"memorization":"sequential";const id=await createSession(mode,{nodeIds:route.nodeIds??[],order:"direct"},rows.map(r=>r.id),index);return navigate({view:"session",id});}
     if(action.startsWith("start-directory-search:")){const order=action.slice("start-directory-search:".length);const route=history.state as Route;if(route.view!=="directory"||route.sessionId)return;const query=route.query?.trim()??"";if(!query)return;const all=await questionsForScope(route.nodeIds??[]);let rows=(route.kind==="memorization"?all.filter(q=>q.type==="memorization"):all.filter(isEnabledBrush)).filter(r=>directoryMatches(parseQuestion(r),query));if(order==="random")rows=shuffled(rows);if(!rows.length)return notify("没有匹配内容");const mode=route.kind==="memorization"?"memorization":order==="random"?"random":"sequential";const id=await createSession(mode,{nodeIds:route.nodeIds??[],order,source:"directory-search",searchQuery:query},rows.map(r=>r.id));return navigate({view:"session",id});}
