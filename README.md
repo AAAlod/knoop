@@ -2,7 +2,7 @@
 
 > 一个本地优先的个人知识练习工具。
 
-**0.1.11 Alpha**
+**0.1.12 Alpha**
 
 [![AI-assisted development](https://img.shields.io/badge/development-AI--assisted-6f42c1)](#ai-辅助开发)
 

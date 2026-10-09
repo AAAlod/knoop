@@ -211,11 +211,11 @@ if (ui) {
     });
     await check('U01 browser: home / scope / mode / actual session agree (2 brush + 2 memo)', async () => {
       await fresh();
-      assert.match(await page.locator('.home-summary').innerText(), /总内容 5/);
-      assert.match(await page.locator('.home-summary').innerText(), /背诵材料 2/);
+      assert.match(await page.locator('.home-summary').innerText(), /总 5/);
+      assert.match(await page.locator('.home-summary').innerText(), /背诵 2/);
       await action('scope').click();
       await action('scope-bank:review-a').click();
-      await textHas('.scope-bottom', '可刷 2 题');
+      await textHas('.scope-bottom', '可刷 2');
       assert.match(await page.locator('.scope-bottom').innerText(), /可刷 2 题 · 可背 2 项/);
       await action('scope-next').click();
       await page.locator('.scope-selection-summary').waitFor();
@@ -225,26 +225,26 @@ if (ui) {
       assert.equal(JSON.parse((await d.latestSession()).question_ids_json).length, 2);
       // Disabling multi affects both scope and mode, not total content.
       await route({ view: 'home' }); await action('filter-type:multiple_choice').click();
-      await textHas('.home-summary', '可刷 1 题');
-      assert.match(await page.locator('.home-summary').innerText(), /可刷 1 题/);
+      await textHas('.home-summary', '可刷 1');
+      assert.match(await page.locator('.home-summary').innerText(), /可刷 1/);
       await action('scope').click(); await action('scope-bank:review-a').click();
-      await textHas('.scope-bottom', '可刷 1 题');
-      assert.match(await page.locator('.scope-bottom').innerText(), /可刷 1 题/);
+      await textHas('.scope-bottom', '可刷 1');
+      assert.match(await page.locator('.scope-bottom').innerText(), /可刷 1/);
       await action('scope-next').click();
       await page.locator('.scope-selection-summary').waitFor();
-      assert.match(await page.locator('.scope-selection-summary').innerText(), /可刷 1 题/);
+      assert.match(await page.locator('.scope-selection-summary').innerText(), /可刷 1/);
       await route({ view: 'home' }); await action('filter-type:multiple_choice').click();
-      await textHas('.home-summary', '可刷 2 题');
+      await textHas('.home-summary', '可刷 2');
     });
     await check('U02 browser: wrong semantics in list, empty state and stats', async () => {
       await fresh(); const row = (await d.getQuestions())[0];
       const id = await d.createSession('sequential', {}, [row.id]);
       await d.addAttempt(row.id, id, ['B'], 'auto', false);
       await route({ view: 'list', kind: 'wrong' });
-      assert.match(await page.locator('main').innerText(), /最近一次答错.*答对.*移出/s);
+      await page.locator('.stats-rules summary').click(); assert.match(await page.locator('main').innerText(), /最近一次答错.*答对.*移出/s);
       await d.addAttempt(row.id, id, ['A'], 'auto', true);
       await route({ view: 'list', kind: 'wrong' });
-      assert.match(await page.locator('.empty').innerText(), /最近一次答错.*答对.*移出/s);
+      assert.match(await page.locator('.empty').innerText(), /暂无当前错题/); await page.locator('.stats-rules summary').click(); assert.match(await page.locator('main').innerText(), /最近一次答错.*答对.*移出/s);
       await route({ view: 'stats' });
       assert.match(await page.locator('.stats').innerText(), /1\s+错误作答次数/);
       assert.match(await page.locator('.stats').innerText(), /0\s+当前错题数/);
@@ -284,12 +284,12 @@ if (ui) {
           const rows = await d.questionsForScope([(await d.getNodes())[0].id]);
           const id = await d.createSession('random', {}, rows.filter(q => q.type !== 'memorization').map(q => q.id));
           await d.saveSession(id, 1, {}); await route({ view: 'home' });
-          assert.match(await page.locator('.home-session-summary').innerText(), /随机刷题.*2 \/ 2/s);
+          assert.match(await page.locator('.home-session-summary').innerText(), /随机.*2 \/ 2/s);
           assert.equal(await action(`resume:${id}`).evaluate(el => el.classList.contains('primary')), true);
           assert.equal(await action('scope').evaluate(el => el.classList.contains('primary')), false);
         } else assert.equal(await action(state === 'empty' ? 'import' : 'scope').first().evaluate(el => el.classList.contains('primary')), true);
         if (state === 'memo') {
-          assert.match(await page.locator('.home-summary').innerText(), /总内容 2/);
+          assert.match(await page.locator('.home-summary').innerText(), /总 2/);
           await action('scope').click(); await action('scope-bank:review-a').click(); await action('scope-next').click();
           await page.locator('.scope-selection-summary').waitFor();
           assert.match(await page.locator('.scope-selection-summary').innerText(), /可刷 0 题 · 可背 2 项/);

@@ -23,7 +23,8 @@ assert(read('README.md').includes('**' + pkg.version + ' Alpha**'), 'README vers
 const tauriProperties = read('src-tauri/gen/android/app/tauri.properties');
 assert(tauriProperties.includes('tauri.android.versionName=' + pkg.version), 'Android versionName');
 const androidCode=Number(tauriProperties.match(/^tauri.android.versionCode=(\d+)$/m)?.[1]);
-assert(Number.isSafeInteger(androidCode)&&androidCode>0&&(pkg.version!=='0.1.11'||androidCode===112), 'Android versionCode');
+const releaseCodes = {'0.1.11':112,'0.1.12':113};
+assert(Number.isSafeInteger(androidCode)&&androidCode>0&&(!releaseCodes[pkg.version]||androidCode===releaseCodes[pkg.version]), 'Android versionCode');
 for (const setting of ['strip = true', 'lto = true', 'opt-level = "z"', 'codegen-units = 1', 'panic = "unwind"']) assert(cargo.includes(setting), `Release profile: ${setting}`);
 assert(gradle.includes('applicationId = "com.kehai.knoop"'), 'Android applicationId');
 assert(read('src/db.ts').includes('sqlite:knoop.db'), 'SQLite filename');
