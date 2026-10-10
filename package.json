@@ -10,6 +10,7 @@
     "tauri": "tauri",
     "check:repo": "node scripts/check-repo.mjs",
     "test:ai": "node scripts/test-ai-review.mjs",
+    "test:compat": "node scripts/test-webview-compat.mjs",
     "test:temp": "node scripts/test-temp-review.mjs",
     "test:batch": "node scripts/test-batch-review.mjs",
     "test:review-a": "node scripts/test-review-a.mjs",
@@ -18,11 +19,22 @@
     "test:review-d": "node scripts/test-review-d.mjs",
     "test:review-e": "node scripts/test-review-e.mjs",
     "test:review-ui": "node scripts/test-review-ui.mjs",
+    "test:eink-ui": "node scripts/test-eink-ui.mjs",
+    "test:eink-layout": "node scripts/test-eink-layout.mjs",
+    "test:eink-bottom": "node scripts/test-eink-bottom.mjs",
     "check:ci": "node scripts/check-ci.mjs",
     "test:signing": "node scripts/test-release-signing.mjs",
     "test:ci-guards": "node scripts/test-ci-guards.mjs",
     "fixtures:device": "node scripts/generate-device-fixtures.mjs",
-    "test:device-fixtures": "node scripts/test-device-fixtures.mjs"
+    "test:device-fixtures": "node scripts/test-device-fixtures.mjs",
+    "test:eink-search": "node scripts/test-eink-search.mjs",
+    "test:ui": "node scripts/check-ui.mjs",
+    "setup:ui": "playwright install chromium",
+    "test:eink-reading": "node scripts/test-eink-reading.mjs",
+    "test:eink-paging": "node scripts/test-eink-paging.mjs",
+    "test:eink-feedback": "node scripts/test-eink-feedback.mjs",
+    "test:eink-updates": "node scripts/test-eink-updates.mjs",
+    "test:eink-native": "node scripts/test-eink-native.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.8.0",
@@ -34,6 +46,7 @@
     "@tauri-apps/cli": "^2.8.0",
     "ajv-formats": "^3.0.1",
     "esbuild": "^0.28.2",
+    "playwright": "1.64.0",
     "typescript": "^5.8.3",
     "vite": "^7.1.0"
   }

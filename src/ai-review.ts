@@ -20,7 +20,7 @@ function normalizeQuestionFormats(raw: unknown): void {
   for (const value of raw.questions) {
     if (!value || typeof value !== "object" || Array.isArray(value)) continue;
     const question = value as Record<string, unknown>;
-    if (typeof question.type === "string" && Object.hasOwn(typeAliases, question.type)) question.type = typeAliases[question.type];
+    if (typeof question.type === "string" && Object.prototype.hasOwnProperty.call(typeAliases, question.type)) question.type = typeAliases[question.type];
     if ((question.type === "single_choice" || question.type === "blank")
       && Array.isArray(question.answer) && question.answer.length === 1 && typeof question.answer[0] === "string") {
       question.answer = question.answer[0];

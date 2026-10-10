@@ -1,5 +1,6 @@
 mod ai;
 mod storage;
+mod eink;
 
 use tauri::Manager;
 
@@ -15,11 +16,14 @@ pub fn run() {
             Ok(())
         })
         .plugin(tauri_plugin_sql::Builder::default().build())
+        .plugin(eink::init())
         .invoke_handler(tauri::generate_handler![
             storage::atomic_write,
             storage::save_restore_safety_copy,
             storage::list_restore_safety_copies,
             storage::read_restore_safety_copy,
+            eink::get_eink_status,
+            eink::refresh_eink_screen,
             ai::set_ai_config,
             ai::get_ai_config_status,
             ai::clear_ai_config,

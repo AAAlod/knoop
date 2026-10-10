@@ -1,3 +1,10 @@
+import { createUuid, cloneJson } from "./compat";
+import { bindBottomLayout, revealAboveBottom } from "./bottom-layout";
+import { ReadingLayout } from "./reading-layout";
+import { bindScreenReading, screenReadingBar } from "./screen-reading";
+import { Feedback } from "./feedback";
+import { lockStudyControl, updateGradedOptions, updateStudyActions } from "./study-updates";
+import { bindEinkScreen, einkScreenContent } from "./eink-screen";
 import "./style.css";
 import "katex/dist/katex.min.css";
 import renderMathInElement from "katex/contrib/auto-render";
@@ -21,6 +28,16 @@ import type { BankRow, NodeRow, QuestionInput, QuestionRow, ReviewIssue, Session
 import { parseQuestion } from "./types";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
+const readingLayout = new ReadingLayout(app);
+const feedback = new Feedback(app,()=>{
+  readingLayout.refreshHeader();
+  const active=document.activeElement;
+  if(active instanceof HTMLElement&&app.contains(active)&&active.matches("input,textarea,select"))requestAnimationFrame(()=>revealAboveBottom(active));
+});
+let releaseBottomLayout = () => {};
+let releaseScreenReading = () => {};
+let releaseDirectorySearch = () => {};
+let directoryActionAllowed = (_target: HTMLElement) => false;
 
 const mathDelimiters = [
   { left: "$$", right: "$$", display: true },
@@ -34,6 +51,7 @@ function renderMath(root: HTMLElement = app): void {
     renderMathInElement(root, {
       delimiters: mathDelimiters.map(({ left, right, display }) => ({ left, right, display })),
       throwOnError: false,
+      errorColor: "#000000",
       strict: "ignore",
       trust: false,
       ignoredTags: ["script", "noscript", "style", "textarea", "pre", "code", "option", "input"],
@@ -95,6 +113,7 @@ type ReturnTarget =
   | { view: "list"; kind: ListKind }
   | { view: "presets" }
   | { view: "stats" }
+  | { view: "screen" }
   | { view: "temp-groups" }
   | { view: "temp-session"; id: string }
   | { view: "temp-review"; id: string }
@@ -168,22 +187,23 @@ function expandPresetRanges(ranges:ScopePresetRange[],nodes:NodeRow[],contentNod
 type ExpandableListKind = "wrong" | "favorites" | "notes" | "reviews";
 const expandedListItems = new Map<ExpandableListKind, Set<string>>();
 function expandedSet(kind: ExpandableListKind): Set<string> { let set=expandedListItems.get(kind); if(!set){set=new Set<string>();expandedListItems.set(kind,set);} return set; }
-function shell(title: string, body: string, back = true, right = "", titleAction = "") {
+function shell(title: string, body: string, back = true, right = "", titleAction = "", readingKey?:string) {
+  releaseBottomLayout();
+  releaseScreenReading();
+  releaseDirectorySearch();
+  readingLayout.beforeRender();
   const rightSlot = back ? (right || `<span class="header-spacer" aria-hidden="true"></span>`) : right;
   const titleBody = titleAction ? `<button class="header-title" data-action="${esc(titleAction)}" aria-label="${esc(title)}，打开题目目录"><span>${esc(title)}</span><span class="header-title-hint" aria-hidden="true">目录 ⌄</span></button>` : esc(title);
   app.innerHTML = `<header class="${back ? "has-back" : "no-back"}">${back ? `<button class="icon" data-action="back" aria-label="返回上一页">‹</button>` : ""}<h1>${titleBody}</h1>${rightSlot}</header><main>${body}</main>`;
   renderMath();
+  feedback.mount();
+  releaseScreenReading = bindScreenReading(app);
+  releaseBottomLayout = bindBottomLayout(app);
+  readingLayout.afterRender(readingKey);
 }
-function message(text: string, kind: "ok"|"error" = "ok") { const el = document.querySelector("#message"); if (el) { el.className = `message ${kind}`; el.textContent = text; } }
-let toastTimer: number | undefined;
-function notify(text: string, kind: "ok"|"error" = "error"): void {
-  let toast=document.querySelector<HTMLElement>("#app-toast");
-  if(!toast){toast=document.createElement("div");toast.id="app-toast";document.body.appendChild(toast);}
-  toast.className=`app-toast ${kind}`; toast.textContent=text;
-  toast.setAttribute("role",kind==="error"?"alert":"status");
-  toast.hidden=false;
-  window.clearTimeout(toastTimer);
-  toastTimer=window.setTimeout(()=>{toast!.hidden=true;},4000);
+function message(text: string, kind: "ok"|"error" = "ok") { const el = document.querySelector("#message"); if (el) { el.className = `message ${kind}`; el.textContent = text;el.setAttribute("role",kind==="error"?"alert":"status"); } }
+function notify(text: string, kind: "ok"|"error" = "error",key?:string): void {
+  if(kind==="error")feedback.error(text,key);else feedback.ok(text);
 }
 function emptyState(title: string, description: string, action?: {text:string;id:string}): string {
   return `<div class="empty compact"><h2>${esc(title)}</h2>${description?`<p>${esc(description)}</p>`:""}${action?button(action.text,action.id,"primary"):""}</div>`;
@@ -199,6 +219,7 @@ function isReturnTarget(value: unknown): value is ReturnTarget {
     case "scope":
     case "presets":
     case "stats":
+    case "screen":
     case "sessions":
     case "temp-groups":
     case "ai-drafts":
@@ -239,6 +260,8 @@ function isRoute(value: unknown): value is Route {
 
 let renderedRoute:Route|null=null;
 async function renderRoute(route: Route): Promise<void> {
+  releaseDirectorySearch();
+  readingLayout.enterRoute();
   renderedRoute=route;
   switch (route.view) {
     case "home": return home();
@@ -256,6 +279,7 @@ async function renderRoute(route: Route): Promise<void> {
     case "list": return listView(route.kind);
     case "presets": return presetsView();
     case "stats": return statsView();
+    case "screen": shell("屏幕刷新",einkScreenContent());return bindEinkScreen(app);
     case "temp-groups": return tempGroupsView();
     case "temp-session": return tempSessionView(route.id);
     case "temp-review": return tempReviewView(route.id);
@@ -308,7 +332,8 @@ async function home() {
   const recent = scopePresets.find(p=>p.id===recentPresetId());
   const recentCard = recent ? `<section class="home-recent-preset"><div><small>最近使用</small><b>${esc(recent.name)}</b><span>${esc(presetSummary(recent))}</span></div><button type="button" data-action="start-preset:${esc(recent.id)}">开始</button></section>` : "";
   const heading=`<div class="home-heading"><h1>Knoop</h1></div>`;
-  if(!summary.banks&&!resume&&!tempGroupCount&&!pendingDraftCount&&!previousBatchJob){app.innerHTML=`<main class="home-main">${heading}<div class="home-study">${button("导入题库","import","primary")}</div></main>`;return;}
+  releaseBottomLayout();releaseScreenReading();readingLayout.beforeRender();
+  if(!summary.banks&&!resume&&!tempGroupCount&&!pendingDraftCount&&!previousBatchJob){app.innerHTML=`<main class="home-main">${heading}<div class="home-study">${button("导入题库","import","primary")}</div></main>`;feedback.mount();readingLayout.afterRender();window.scrollTo(0,0);return;}
   app.innerHTML = `<main class="home-main">${heading}<div class="home-summary"><span>题库 ${summary.banks}</span><span>总 ${summary.totalContent}</span><span>可刷 ${summary.questions}</span><span>背诵 ${summary.memorization}</span></div>
     <section class="home-study"><div class="stack">
       ${resume ? `<div class="home-resume">${button("继续", `resume:${resume.id}`, "primary")}<p class="home-session-summary">${esc(sessionSummary(resume))}</p></div>` : ""}
@@ -320,6 +345,7 @@ async function home() {
       ${resume?button("未完成","sessions","secondary"):""}${button("练习方案","presets","secondary")}
       ${button("题库","import","secondary")}${button("统计","stats","secondary")}${button("备份与恢复","backup","secondary")}
       ${button("笔记","notes","secondary")}${button(pendingReviews?`待返修 ${pendingReviews}`:"待返修","reviews","secondary")}
+      ${button("屏幕刷新","screen","secondary")}
     </nav>
     <section class="home-ai"><h2 class="section-title">AI 回炉</h2><div class="home-nav">
       ${button("批量回炉","batch-new","secondary")}${button(tempGroupCount?`AI 题组 ${tempGroupCount}`:"AI 题组","temp-groups","secondary")}
@@ -327,6 +353,9 @@ async function home() {
       ${previousBatchJob?button("继续任务",`batch-open:${previousBatchJob.id}`,"secondary"):""}
     </div></section></main>`;
   renderMath();
+  feedback.mount();
+  readingLayout.afterRender();
+  window.scrollTo(0,0);
 }
 
 async function sessionsView():Promise<void>{
@@ -558,7 +587,7 @@ function reviewQuestionPreview(q: QuestionInput): string {
   return `<div class="review-question-preview"><div class="review-preview-head"><span class="type">${questionTypeLabel(q)}</span></div><div class="review-preview-section"><b>提示</b><div class="multiline">${esc(q.prompt)}</div></div><div class="review-preview-section"><b>内容</b><div class="multiline">${esc(q.content)}</div></div>${keyPoints}${explain}</div>`;
 }
 
-function presetId(): string { return `preset-${crypto.randomUUID()}`; }
+function presetId(): string { return `preset-${createUuid()}`; }
 function validPresetTypes(types: BrushType[]): BrushType[] { return types.filter(t=>brushTypes.includes(t)); }
 async function saveScopePreset(nodeIds: string[]): Promise<void> {
   const name=(document.querySelector<HTMLInputElement>("#preset-name")?.value??"").trim();
@@ -703,16 +732,28 @@ async function directoryView(route: Extract<Route,{view:"directory"}>) {
     const all=await questionsForScope(route.nodeIds??[]); rows=route.kind==="memorization"?all.filter(q=>q.type==="memorization"):all.filter(isEnabledBrush);
   }
   if(!rows.length){return shell(title,`${emptyState("没有可定位的内容","请重新选择学习范围。",{text:"去学习",id:"scope"})}`);}
-  const query=route.query??"",index=indexDirectory(rows);let entries=searchDirectory(index,query),limit=100,timer=0,currentQuery=query;
-  shell(title,`<div class="directory-search"><input id="directory-search" type="search" placeholder="搜索题目" value="${esc(query)}"><span id="directory-search-count"></span></div><div id="directory-search-actions"></div><div class="directory-jump"><input id="directory-index" type="number" min="1" max="${rows.length}" value="${Math.max(1,currentIndex+1)}" inputmode="numeric"><button data-action="directory-go">跳转</button></div><div id="directory-list" class="directory-list"></div><button id="directory-more" type="button">显示更多</button>`);
+  const query=route.query??"",index=indexDirectory(rows);let entries=searchDirectory(index,query),limit=100,timer=0,currentQuery=query,busy=false,composing=false,revision=0,disposed=false;
+  shell(title,`<div class="directory-search"><input id="directory-search" type="search" placeholder="搜索题目" aria-label="搜索题目" value="${esc(query)}"><span id="directory-search-count" role="status" aria-live="polite"></span></div><div id="directory-search-actions"></div><div class="directory-jump"><input id="directory-index" type="number" min="1" max="${rows.length}" value="${Math.max(1,currentIndex+1)}" inputmode="numeric"><button data-action="directory-go">跳转</button></div><div id="directory-list" class="directory-list"></div><button id="directory-more" type="button">显示更多</button>`);
   const list=document.querySelector<HTMLElement>("#directory-list")!,count=document.querySelector<HTMLElement>("#directory-search-count")!,actions=document.querySelector<HTMLElement>("#directory-search-actions")!,more=document.querySelector<HTMLButtonElement>("#directory-more")!;
-  const draw=()=>{list.innerHTML=directoryListHtml(entries.slice(0,limit),route.sessionId,currentIndex,currentQuery);list.inert=false;list.removeAttribute("aria-busy");renderMath(list);count.textContent=`${currentQuery.trim()?`找到 ${entries.length} / ${rows.length}`:`共 ${rows.length} 项`}${entries.length>limit?` · 已显示 ${limit}`:""}`;more.hidden=entries.length<=limit;actions.innerHTML=directorySearchActionsHtml({...route,query:currentQuery},entries.length);};
-  draw();more.onclick=()=>{limit+=100;draw();};
-  const search=document.querySelector<HTMLInputElement>("#directory-search");
-  search?.addEventListener("input",()=>{
-    history.replaceState({...route,query:search.value},"");clearTimeout(timer);list.inert=true;list.setAttribute("aria-busy","true");actions.innerHTML="";more.hidden=true;count.textContent="正在搜索…";
-    timer=window.setTimeout(()=>{if(!search.isConnected)return;currentQuery=search.value;entries=searchDirectory(index,currentQuery);limit=100;draw();},180);
-  });
+  const search=document.querySelector<HTMLInputElement>("#directory-search")!;
+  const controls=()=>app.querySelectorAll<HTMLButtonElement|HTMLInputElement>(".directory-item,.directory-search-actions button,.directory-jump input,.directory-jump button,#directory-more");
+  const setBusy=(value:boolean)=>{busy=value;list.setAttribute("aria-busy",String(value));controls().forEach(control=>control.disabled=value);};
+  const draw=()=>{list.innerHTML=directoryListHtml(entries.slice(0,limit),route.sessionId,currentIndex,currentQuery);renderMath(list);count.textContent=`${currentQuery.trim()?`找到 ${entries.length} / ${rows.length}`:`共 ${rows.length} 项`}${entries.length>limit?` · 已显示 ${limit}`:""}`;more.hidden=entries.length<=limit;actions.innerHTML=directorySearchActionsHtml({...route,query:currentQuery},entries.length);setBusy(false);const ticket=revision;directoryActionAllowed=target=>ticket===revision&&allowed(target);};
+  // Native disabled and the action guard work on WebView 83, which has no inert support.
+  const allowed=(target:HTMLElement)=>!disposed&&search.isConnected&&history.state?.view==="directory"&&target.isConnected&&!target.matches(":disabled")&&!busy&&!composing&&search.value===currentQuery;
+  releaseDirectorySearch=()=>{disposed=true;clearTimeout(timer);revision++;directoryActionAllowed=()=>false;releaseDirectorySearch=()=>{};};
+  draw();more.onclick=()=>{if(!directoryActionAllowed(more))return;limit+=100;draw();};
+  const queueSearch=()=>{
+    if(disposed)return;
+    history.replaceState({...route,query:search.value},"");clearTimeout(timer);const expected=++revision;
+    const ticket=revision;directoryActionAllowed=target=>ticket===revision&&allowed(target);
+    setBusy(true);count.textContent=composing?"输入中…":"正在搜索…";
+    if(composing)return;
+    timer=window.setTimeout(()=>{if(disposed||!search.isConnected||expected!==revision||composing)return;currentQuery=search.value;entries=searchDirectory(index,currentQuery);limit=100;draw();},180);
+  };
+  search.addEventListener("compositionstart",()=>{composing=true;queueSearch();});
+  search.addEventListener("compositionend",()=>{composing=false;queueSearch();});
+  search.addEventListener("input",event=>{if((event as InputEvent).isComposing)composing=true;queueSearch();});
 }
 
 async function openSession(id:string){
@@ -723,9 +764,50 @@ async function openSession(id:string){
   quickMode=!!saved.quickMode; pageState={submitted:saved.submitted,correct:saved.correct,pendingManual:saved.pendingManual,revealed:saved.revealed,recallShown:saved.recallShown}; selection=new Set(saved.selection??[]); excludedOptions=new Set(saved.excludedOptions??[]); blankValue=saved.blankValue??""; await quizView();
 }
 
-function memorizationBody(q: QuestionInput, shown: boolean) {
+function memorizationPanel(q: QuestionInput) {
   const keyPoints = q.keyPoints?.length ? `<div class="key-points"><h3>要点</h3><ul>${q.keyPoints.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></div>` : "";
-  return `<div class="type">背诵</div><h2 class="stem">${esc(q.prompt)}</h2>${shown?`<div class="answer-panel"><div class="multiline">${esc(q.content)}</div>${keyPoints}${explanation(q)}</div>`:button("显示内容","show-content","primary")}`;
+  return `<div class="answer-panel"><div class="multiline">${esc(q.content)}</div>${keyPoints}${explanation(q)}</div>`;
+}
+function recallPanel(q:QuestionInput){return `<div class="answer-panel"><h3>答案</h3><div class="multiline">${esc(q.back)}</div>${explanation(q)}</div>`;}
+function memorizationBody(q:QuestionInput,shown:boolean){return `<div class="type">背诵</div><h2 class="stem">${esc(q.prompt)}</h2>${shown?memorizationPanel(q):button("显示内容","show-content","primary")}`;}
+function quizControls(q:QuestionInput,index:number,shown:boolean):string {
+  if(q.type==="recall"||q.type==="memorization")return shown?button(index+1===activeRows.length?"完成":"下一项","next","primary"):"";
+  if(pageState.pendingManual)return `${button("答错","manual:false","grading-wrong")}${button("答对","manual:true","primary")}`;
+  if(pageState.submitted)return button(index+1===activeRows.length?"完成":"下一题","next","primary");
+  if(quickMode&&q.type==="single_choice")return "";
+  return `<button class="primary" data-action="submit" ${(q.type==="blank"?!!blankValue.trim():selection.size>0)?"":"disabled"}>提交</button>`;
+}
+
+function patchQuiz():boolean {
+  if(!activeSession)return false;
+  const row=activeRows[activeSession.current_index];if(!row)return false;
+  const key=`session:${activeSession.id}:${row.id}`,quiz=app.querySelector<HTMLElement>(".quiz");
+  if(quiz?.dataset.readingKey!==key)return false;
+  const q=parseQuestion(row),shown=quickMode||!!pageState.revealed||!!pageState.recallShown;
+  const revealFocused=document.activeElement===quiz.querySelector('[data-action="show-content"]');
+  readingLayout.beforeRender();
+  if(q.type==="recall"||q.type==="memorization"){
+    if(shown){
+      quiz.querySelector('[data-action="show-content"]')?.remove();
+      if(!quiz.querySelector(".answer-panel")){quiz.insertAdjacentHTML("beforeend",q.type==="recall"?recallPanel(q):memorizationPanel(q));renderMath(quiz.querySelector<HTMLElement>(".answer-panel")!);}
+    }else{
+      quiz.querySelector(".answer-panel")?.remove();
+      if(!quiz.querySelector('[data-action="show-content"]'))quiz.insertAdjacentHTML("beforeend",button(q.type==="recall"?"显示答案":"显示内容","show-content","primary"));
+    }
+  }else{
+    updateGradedOptions(quiz,q,selection,excludedOptions,!!pageState.submitted,!!pageState.submitted);
+    const blank=quiz.querySelector<HTMLInputElement>("#blank");if(blank)lockStudyControl(blank,!!pageState.submitted||!!pageState.pendingManual);
+    if(pageState.submitted||pageState.pendingManual){
+      quiz.querySelector(".option-help")?.remove();
+      if(!quiz.querySelector(".answer-panel")){quiz.insertAdjacentHTML("beforeend",resultPanel(q));renderMath(quiz.querySelector<HTMLElement>(".answer-panel")!);}
+      else quiz.querySelector(".answer-panel>h3")!.textContent=pageState.pendingManual?"请自行判断":pageState.correct?"回答正确":"回答错误";
+    }
+  }
+  const quick=app.querySelector<HTMLButtonElement>('[data-action="toggle-quick"]');
+  if(quick){quick.classList.toggle("active",quickMode);quick.setAttribute("aria-pressed",String(quickMode));quick.textContent=`快刷${quickMode?"✓":""}`;}
+  updateStudyActions(app,quizControls(q,activeSession.current_index,shown));
+  if(revealFocused)app.querySelector<HTMLButtonElement>(".study-actions>button:not(:disabled)")?.focus({preventScroll:true});
+  readingLayout.afterRender(key);return true;
 }
 
 async function quizView(){
@@ -734,7 +816,7 @@ async function quizView(){
   const row=activeRows[index],q=parseQuestion(row), fav=await isFavorite(row.id), killed=await isKilled(row.id), reviewed=await isReviewed(row.id), note=await getNote(row.id); const progress=`${index+1} / ${activeRows.length}`;
   const shown = quickMode || !!pageState.revealed || !!pageState.recallShown;
   let content="";
-  if(q.type==="recall") content=`<div class="type">背诵卡</div><h2 class="stem">${esc(q.front)}</h2>${shown?`<div class="answer-panel"><h3>答案</h3><div class="multiline">${esc(q.back)}</div>${explanation(q)}</div>`:button("显示答案","show-content","primary")}`;
+  if(q.type==="recall") content=`<div class="type">背诵卡</div><h2 class="stem">${esc(q.front)}</h2>${shown?recallPanel(q):button("显示答案","show-content","primary")}`;
   else if(q.type==="memorization") content=memorizationBody(q,shown);
   else {
     content=`<div class="type">${q.type==="single_choice"?"单选题":q.type==="multiple_choice"?"多选题":"填空题"}</div><h2 class="stem">${esc(q.stem)}</h2>`;
@@ -742,17 +824,13 @@ async function quizView(){
     if(q.type==="blank") content+=`<input id="blank" class="blank" placeholder="输入答案" value="${esc(blankValue)}" ${pageState.submitted||pageState.pendingManual?"disabled":""}>`;
     if(pageState.submitted||pageState.pendingManual) content+=resultPanel(q);
   }
-  const canSubmit=q.type==="blank"?!!blankValue.trim():selection.size>0;
-  let bottom="";
-  if(q.type==="recall"||q.type==="memorization") bottom=shown?button(index+1===activeRows.length?"完成":"下一项","next","primary"):"";
-  else if(pageState.pendingManual) bottom=`${button("答错","manual:false","grading-wrong")}${button("答对","manual:true","primary")}`;
-  else if(pageState.submitted) bottom=button(index+1===activeRows.length?"完成":"下一题","next","primary");
-  else if(quickMode && q.type==="single_choice") bottom="";
-  else bottom=`<button class="primary" data-action="submit" ${canSubmit?"":"disabled"}>提交</button>`;
+  const bottom=quizControls(q,index,shown);
   const quickAvailable=["sequential","random","recall","memorization"].includes(activeSession.mode);
   const quickButton=quickAvailable?`<button class="header-action ${quickMode?"active":""}" data-action="toggle-quick" aria-pressed="${quickMode}">快刷${quickMode?"✓":""}</button>`:"";
-  shell(progress,`<article class="quiz">${content}</article><div class="question-actions"><button data-action="favorite:${esc(row.id)}">${fav?"★ 已收藏":"☆ 收藏"}</button><button class="${note?"note-active":""}" data-action="note:${esc(row.id)}">${note?"● 笔记":"笔记"}</button><details class="question-more"><summary>更多</summary><div class="question-more-actions"><button data-action="edit:${esc(row.id)}">编辑</button><button class="${killed?"restore-action":"destructive-action"}" data-action="kill:${esc(row.id)}" ${reviewed?"disabled":""}>${reviewed?"已斩杀":killed?"恢复":"斩杀"}</button><button class="${reviewed?"review-active":""}" data-action="review:${esc(row.id)}">${reviewed?"● 待返修":"标记问题"}</button></div></details></div>${bottom?`<div class="bottom-actions">${bottom}</div>`:""}`,true,quickButton,"session-directory");
-  const blank=document.querySelector<HTMLInputElement>("#blank"); if(blank) blank.oninput=()=>{if(studyBusy)return;blankValue=blank.value; const submit=document.querySelector<HTMLButtonElement>('[data-action="submit"]'); if(submit)submit.disabled=!blankValue.trim(); void persistDraft().catch(reportSaveError);};
+  shell(progress,`<article class="quiz" data-reading-key="${esc(`session:${activeSession.id}:${row.id}`)}">${content}</article><div class="question-actions"><button data-action="favorite:${esc(row.id)}" aria-pressed="${fav}">${fav?"★ 已收藏":"☆ 收藏"}</button><button class="${note?"note-active":""}" data-action="note:${esc(row.id)}">${note?"● 笔记":"笔记"}</button><button id="question-edit-action" class="question-extra-action" data-action="edit:${esc(row.id)}" hidden>编辑</button><button id="question-kill-action" class="question-extra-action ${killed?"restore-action":"destructive-action"}" data-action="kill:${esc(row.id)}" ${reviewed?"disabled":""} hidden>${reviewed?"已斩杀":killed?"恢复":"斩杀"}</button><button id="question-review-action" class="question-extra-action ${reviewed?"review-active":""}" data-action="review:${esc(row.id)}" hidden>${reviewed?"● 待返修":"标记问题"}</button><button class="question-more-toggle" data-action="toggle-question-more" aria-expanded="false" aria-controls="question-edit-action question-kill-action question-review-action">更多</button></div>${screenReadingBar(bottom)}`,true,quickButton,"session-directory",`session:${activeSession.id}:${row.id}`);
+  app.querySelector<HTMLElement>(".study-actions")!.dataset.content=bottom;
+  for(const control of app.querySelectorAll<HTMLElement>('[data-action="toggle-quick"],[data-action^="favorite:"]'))control.addEventListener("pointerdown",event=>{if(document.activeElement?.matches("input,textarea,select"))event.preventDefault();});
+  const blank=document.querySelector<HTMLInputElement>("#blank"); if(blank) blank.oninput=()=>{if(studyBusy)return;blankValue=blank.value; const submit=document.querySelector<HTMLButtonElement>('[data-action="submit"]'); if(submit)submit.disabled=!blankValue.trim(); void persistDraft().catch(reportDraftError);};
   bindOptionLongPress();
 }
 function explanation(q:QuestionInput){return `<div class="explain"><h3>解析</h3><div class="multiline">${q.explanation?esc(q.explanation):"无解析"}</div></div>`;}
@@ -765,6 +843,36 @@ function optionResult(q:QuestionInput,id:string,picked:boolean,submitted:boolean
 function answerText(q:QuestionInput){ if(q.options){const ids=Array.isArray(q.answer)?q.answer:[q.answer]; return q.options.filter(o=>ids.includes(o.id)).map(o=>`${o.id}. ${o.text}`).join("；");} return String(q.answer??q.back??q.content??""); }
 function resultPanel(q:QuestionInput){const answer=q.options?"":`<div class="multiline"><b>正确答案：</b>${esc(answerText(q))}</div>`;return `<section class="answer-panel"><h3>${pageState.pendingManual?"请自行判断":pageState.correct?"回答正确":"回答错误"}</h3>${answer}${explanation(q)}</section>`;}
 function reportSaveError(error: unknown){notify(error instanceof Error?error.message:String(error));}
+async function toggleFavoriteButton(target:HTMLElement,id:string):Promise<void>{
+  if(!(target instanceof HTMLButtonElement)||!target.isConnected||target.disabled)return;
+  target.disabled=true;target.setAttribute("aria-busy","true");
+  try{const saved=await toggleFavorite(id);if(target.isConnected){target.textContent=saved?"★ 已收藏":"☆ 收藏";target.setAttribute("aria-pressed",String(saved));}}
+  finally{target.disabled=false;target.removeAttribute("aria-busy");}
+}
+async function toggleQuickOrReveal(reveal:boolean):Promise<void>{
+  await withStudyAction(async()=>{
+    if(reveal)pageState.revealed=true;else quickMode=!quickMode;
+    try{await persistDraft();}catch(error){reportDraftError(error);}
+    if(!patchQuiz())await quizView();
+  });
+}
+function reportDraftError(error:unknown){
+  feedback.error(`答案草稿未保存：${error instanceof Error?error.message:String(error)}。请重试保存，保存前不要关闭应用。`,"draft",async()=>{
+    await flushDrafts();feedback.resolve("draft");notify("答案草稿已保存","ok");
+  });
+}
+let formBusy=false;
+async function withFormSave(task:()=>Promise<void>):Promise<void>{
+  if(formBusy)return;
+  formBusy=true;app.setAttribute("aria-busy","true");
+  const controls=[...app.querySelectorAll<HTMLButtonElement>("button:not(:disabled):not([data-feedback-control]):not([data-reading-direction])")];
+  const active=document.activeElement as HTMLButtonElement|null;
+  const label=active?.textContent;
+  controls.forEach(control=>control.disabled=true);
+  if(active?.matches(".form-bottom-actions button"))active.textContent="保存中…";
+  try{await task();}
+  finally{formBusy=false;app.removeAttribute("aria-busy");controls.forEach(control=>control.disabled=false);if(active?.isConnected&&label!=null)active.textContent=label;}
+}
 let studyBusy=false;
 let studyDone:Promise<void>=Promise.resolve();
 async function withStudyAction(task:()=>Promise<void>):Promise<void>{
@@ -772,11 +880,15 @@ async function withStudyAction(task:()=>Promise<void>):Promise<void>{
   studyBusy=true;
   let release!:()=>void;
   studyDone=new Promise<void>(resolve=>release=resolve);
-  const controls=[...app.querySelectorAll<HTMLButtonElement|HTMLInputElement>("button:not(:disabled),input:not(:disabled)")];
+  // Reading controls only move the viewport and can remain usable while an answer is saved.
+  const controls=[...app.querySelectorAll<HTMLButtonElement|HTMLInputElement>("button:not(:disabled):not([data-reading-direction]):not([data-feedback-control]),input:not(:disabled)")];
   const focused=document.activeElement as HTMLElement|null;
+  const busyButton=focused?.matches(".study-actions>button")?focused:null,label=busyButton?.textContent;
+  if(busyButton)busyButton.textContent="处理中…";
+  app.setAttribute("aria-busy","true");
   controls.forEach(control=>control.disabled=true);
   try{await flushDrafts();await task();}
-  finally{studyBusy=false;controls.forEach(control=>control.disabled=false);if(focused?.isConnected&&!focused.matches(":disabled"))focused.focus({preventScroll:true});release();}
+  finally{studyBusy=false;app.removeAttribute("aria-busy");controls.forEach(control=>control.disabled=control.hasAttribute("data-study-locked"));if(busyButton?.isConnected&&label!=null)busyButton.textContent=label;if(focused?.isConnected&&!focused.matches(":disabled"))focused.focus({preventScroll:true});release();}
 }
 async function persistDraft(){
   if(!activeSession)return;
@@ -786,7 +898,7 @@ async function persistDraft(){
 async function submit(){return withStudyAction(async()=>{ if(!activeSession||pageState.submitted||pageState.pendingManual)return; const row=activeRows[activeSession.current_index];if(!row)return;const q=parseQuestion(row);const answer=q.type==="blank"?blankValue:[...selection];
   if(q.type==="blank"?!blankValue.trim():!selection.size)return;
   const grade=gradeQuestion(q,answer);
-  if(grade===null){const old=pageState;pageState={pendingManual:true};try{await persistDraft();}catch(error){pageState=old;throw error;}return quizView();}
+  if(grade===null){const old=pageState;pageState={pendingManual:true};try{await persistDraft();}catch(error){pageState=old;throw error;}if(!patchQuiz())await quizView();return;}
   await recordAnswer(row.id,answer,"auto",grade);
 });}
 async function record(questionId:string,answer:unknown,grading:string,correct:boolean){return withStudyAction(()=>recordAnswer(questionId,answer,grading,correct));}
@@ -795,11 +907,11 @@ async function recordAnswer(questionId:string,answer:unknown,grading:string,corr
   const state={submitted:true,correct,selection:[...selection],excludedOptions:[...excludedOptions],blankValue,quickMode};
   await recordSessionAnswer(activeSession,questionId,answer,grading,correct,state);
   pageState={submitted:true,correct};activeSession.state_json=JSON.stringify(state);
-  if(quickMode&&correct){try{return await advance();}catch(error){await quizView();throw error;}}
-  await quizView();
+  if(quickMode&&correct){try{return await advance();}catch(error){if(!patchQuiz())await quizView();throw error;}}
+  if(!patchQuiz())await quizView();
 }
 async function next(){return withStudyAction(advance);}
-async function advance(){if(!activeSession)return;const nextIndex=activeSession.current_index+1;await saveSession(activeSession.id,nextIndex,{quickMode},nextIndex>=activeRows.length);activeSession.current_index=nextIndex;activeSession.state_json=JSON.stringify({quickMode});selection.clear();excludedOptions.clear();blankValue="";pageState={};if(nextIndex>=activeRows.length)finishView();else await quizView();}
+async function advance(){if(!activeSession)return;const nextIndex=activeSession.current_index+1;await saveSession(activeSession.id,nextIndex,{quickMode},nextIndex>=activeRows.length);activeSession.current_index=nextIndex;activeSession.state_json=JSON.stringify({quickMode});selection.clear();excludedOptions.clear();blankValue="";pageState={};readingLayout.startNewItem();if(nextIndex>=activeRows.length)finishView();else await quizView();}
 function finishView(){shell("本轮完成",`<div class="empty finish-page"><div class="finish">✓</div><h2>完成 ${activeRows.length} 项</h2>${activeSession?button("再来一组",`repeat-session:${activeSession.id}`,"primary"):""}${button("错题","wrong")}${button("首页","home")}</div>`,false);}
 async function repeatRound(id:string):Promise<void>{
   let created:string|undefined;
@@ -828,7 +940,7 @@ function bindOptionLongPress(){
     let timer=0;
     const id=el.dataset.optionId!;
     const cancel=()=>{if(timer){clearTimeout(timer);timer=0;}};
-    el.addEventListener("pointerdown",()=>{ cancel(); timer=window.setTimeout(()=>{ timer=0;if(studyBusy||!el.isConnected||pageState.submitted||pageState.pendingManual)return; if(excludedOptions.has(id)) excludedOptions.delete(id); else {excludedOptions.add(id);selection.delete(id);} suppressOptionClickId=id;suppressOptionClickUntil=Date.now()+800;updateOptionStyles(selection,excludedOptions);void persistDraft().catch(reportSaveError); },480); });
+    el.addEventListener("pointerdown",()=>{ cancel(); timer=window.setTimeout(()=>{ timer=0;if(studyBusy||!el.isConnected||pageState.submitted||pageState.pendingManual)return; if(excludedOptions.has(id)) excludedOptions.delete(id); else {excludedOptions.add(id);selection.delete(id);} suppressOptionClickId=id;suppressOptionClickUntil=Date.now()+800;updateOptionStyles(selection,excludedOptions);void persistDraft().catch(reportDraftError); },480); });
     el.addEventListener("pointerup",cancel); el.addEventListener("pointercancel",cancel); el.addEventListener("pointerleave",cancel);
     el.addEventListener("contextmenu",e=>e.preventDefault());
   }
@@ -1045,6 +1157,28 @@ async function tempGroupsView(): Promise<void> {
   shell("AI 题组", groups.length ? `<div class="stack">${cards}</div>` : emptyState("暂无 AI 题组", "", {text:"查看当前错题",id:"wrong"}));
 }
 
+function patchTempSession(id:string,q:QuestionInput,index:number,total:number,state:TempState):boolean {
+  const key=`temp:${id}:${index}:${q.id}`,quiz=app.querySelector<HTMLElement>(".quiz");
+  if(quiz?.dataset.readingKey!==key)return false;
+  readingLayout.beforeRender();
+  if(activeTempDraft?.id===id&&activeTempDraft.index===index)Object.assign(activeTempDraft.state,state);
+  updateGradedOptions(quiz,q,new Set(state.selection),new Set(),state.submitted,state.submitted||state.pendingManual);
+  const blank=quiz.querySelector<HTMLInputElement>("#temp-blank");if(blank)lockStudyControl(blank,state.submitted||state.pendingManual);
+  if(state.submitted||state.pendingManual){
+    if(!quiz.querySelector(".answer-panel")){quiz.insertAdjacentHTML("beforeend",tempResultPanel(q,state));renderMath(quiz.querySelector<HTMLElement>(".answer-panel")!);}
+    else quiz.querySelector(".answer-panel>h3")!.textContent=state.pendingManual?"请自行判断":state.correct?"回答正确":"回答错误";
+  }
+  updateStudyActions(app,tempControls(q,state,index,total));readingLayout.afterRender(key);return true;
+}
+function tempControls(q:QuestionInput,state:TempState,index:number,total:number):string {
+  return state.pendingManual
+    ? `${button("答错","temp-manual:false","grading-wrong")}${button("答对","temp-manual:true","primary")}`
+    : state.submitted
+      ? button(index + 1 === total ? "完成" : "下一题","temp-next","primary")
+      : `<button class="primary" data-action="temp-submit" ${q.type === "blank" ? state.blank.trim() ? "" : "disabled" : state.selection.length ? "" : "disabled"}>提交</button>`;
+}
+function tempResultPanel(q:QuestionInput,state:TempState):string {return `<section class="answer-panel"><h3>${state.pendingManual?"请自行判断":state.correct?"回答正确":"回答错误"}</h3><div class="multiline"><b>正确答案：</b>${esc(answerText(q))}</div>${explanation(q)}</section>`;}
+
 async function tempSessionView(id: string): Promise<void> {
   const group = await getTempGroup(id);
   if (!group) { shell("AI 题组", emptyState("题组已删除或不存在", "返回AI 题组列表。", {text:"AI 题组",id:"temp-groups"})); return; }
@@ -1059,13 +1193,10 @@ async function tempSessionView(id: string): Promise<void> {
   let content = `<div class="type">${q.type === "single_choice" ? "单选题" : q.type === "multiple_choice" ? "多选题" : "填空题"}</div><h2 class="stem">${esc(q.stem)}</h2>`;
   if (q.options) content += `<div class="options">${q.options.map(o => `<button class="option ${state.selection.includes(o.id) ? "selected" : ""} ${state.submitted ? (Array.isArray(q.answer) ? q.answer : [q.answer]).includes(o.id) ? "right" : state.selection.includes(o.id) ? "wrong" : "" : ""}" data-action="temp-option:${esc(o.id)}" aria-pressed="${state.selection.includes(o.id)}" ${state.submitted || state.pendingManual ? "disabled" : ""}><b>${esc(o.id)}</b><span class="option-copy"><span>${esc(o.text)}</span>${optionResult(q,o.id,state.selection.includes(o.id),state.submitted)}</span></button>`).join("")}</div>`;
   if (q.type === "blank") content += `<input id="temp-blank" class="blank" placeholder="输入答案" value="${esc(state.blank)}" ${state.submitted || state.pendingManual ? "disabled" : ""}>`;
-  if (state.submitted || state.pendingManual) content += `<section class="answer-panel"><h3>${state.pendingManual ? "请自行判断" : state.correct ? "回答正确" : "回答错误"}</h3><div class="multiline"><b>正确答案：</b>${esc(answerText(q))}</div>${explanation(q)}</section>`;
-  const controls = state.pendingManual
-    ? `${button("答错","temp-manual:false","grading-wrong")}${button("答对","temp-manual:true","primary")}`
-    : state.submitted
-      ? button(index + 1 === questions.length ? "完成" : "下一题","temp-next","primary")
-      : `<button class="primary" data-action="temp-submit" ${q.type === "blank" ? state.blank.trim() ? "" : "disabled" : state.selection.length ? "" : "disabled"}>提交</button>`;
-  shell(`AI 练习 ${index + 1} / ${questions.length}`, `<article class="quiz">${content}</article><p>${esc(group.source_question_id === "batch" ? group.source_question_title : `源自原题 ${group.source_question_id}`)} · ${esc(group.model)}</p>${button("返回题组列表","temp-groups")}<div class="bottom-actions">${controls}</div>`, true);
+  if (state.submitted || state.pendingManual) content += tempResultPanel(q,state);
+  const controls=tempControls(q,state,index,questions.length);
+  shell(`AI 练习 ${index + 1} / ${questions.length}`, `<article class="quiz" data-reading-key="${esc(`temp:${id}:${index}:${q.id}`)}">${content}</article><p>${esc(group.source_question_id === "batch" ? group.source_question_title : `源自原题 ${group.source_question_id}`)} · ${esc(group.model)}</p>${button("返回题组列表","temp-groups")}${screenReadingBar(controls)}`, true,"","",`temp:${id}:${index}:${q.id}`);
+  app.querySelector<HTMLElement>(".study-actions")!.dataset.content=controls;
   const blank = document.querySelector<HTMLInputElement>("#temp-blank");
   if (blank) blank.oninput = () => {
     if(studyBusy)return;
@@ -1073,12 +1204,12 @@ async function tempSessionView(id: string): Promise<void> {
     state.blank=value;
     const submit = document.querySelector<HTMLButtonElement>('[data-action="temp-submit"]');
     if (submit) submit.disabled = !value.trim();
-    void persistTempDraft(id,index,state).catch(reportSaveError);
+    void persistTempDraft(id,index,state).catch(reportDraftError);
   };
 }
 let activeTempDraft:{id:string;index:number;state:TempState;type:string}|null=null;
 function persistTempDraft(id:string,index:number,state:TempState):Promise<void>{
-  const captured=structuredClone(state);
+  const captured=cloneJson(state);
   return enqueueDraft(`temp:${id}`,async()=>{const current=await getTempGroup(id);if(current&&current.current_index===index&&!current.completed_at){const saved=tempState(current);if(!saved.submitted&&!saved.pendingManual)await saveTempProgress(current,index,captured,tempResults(current));}});
 }
 function selectTempOption(option:string):void{
@@ -1086,7 +1217,7 @@ function selectTempOption(option:string):void{
   const el=app.querySelector<HTMLButtonElement>(`[data-action="temp-option:${CSS.escape(option)}"]`);if(!el)return;
   const single=draft.type==="single_choice";
   draft.state.selection=single?[option]:draft.state.selection.includes(option)?draft.state.selection.filter(id=>id!==option):[...draft.state.selection,option];
-  updateOptionStyles(new Set(draft.state.selection),new Set(),"temp-option:");void persistTempDraft(draft.id,draft.index,draft.state).catch(reportSaveError);
+  updateOptionStyles(new Set(draft.state.selection),new Set(),"temp-option:");void persistTempDraft(draft.id,draft.index,draft.state).catch(reportDraftError);
 }
 
 async function saveAiTempGroup(): Promise<void> {
@@ -1121,6 +1252,7 @@ async function tempAction(action:string):Promise<void>{
     if(!state.submitted)return;
     const index=group.current_index+1;
     await saveTempProgress(group,index,emptyTempState(),tempResults(group),index>=tempBank(group).questions.length);
+    readingLayout.startNewItem();
   }else if(action.startsWith("temp-manual:")){
     return recordTempAnswer(action.endsWith("true"),"manual");
   }else{
@@ -1140,12 +1272,12 @@ async function tempAction(action:string):Promise<void>{
         results.push({questionId:q.id,answer:q.type==="blank"?state.blank:[...state.selection],correct:grade,grading:"auto"});
         state.submitted=true;state.correct=grade;
         await saveTempProgress(group,group.current_index,state,results);
-        return tempSessionView(route.id);
+        if(!patchTempSession(route.id,q,group.current_index,tempBank(group).questions.length,state))await tempSessionView(route.id);return;
       }
     }
     await saveTempProgress(group,group.current_index,state,tempResults(group));
   }
-  await tempSessionView(route.id);
+  if(action==="temp-next"||!patchTempSession(route.id,q,group.current_index,tempBank(group).questions.length,state))await tempSessionView(route.id);
 }
 async function recordTempAnswer(correct: boolean, grading: "auto" | "manual"): Promise<void> {
   const route = history.state as Route;
@@ -1161,7 +1293,7 @@ async function recordTempAnswer(correct: boolean, grading: "auto" | "manual"): P
   results.push({questionId:q.id,answer,correct,grading});
   state.pendingManual = false; state.submitted = true; state.correct = correct;
   await saveTempProgress(group,group.current_index,state,results);
-  await tempSessionView(route.id);
+  if(!patchTempSession(route.id,q,group.current_index,tempBank(group).questions.length,state))await tempSessionView(route.id);
 }
 
 let batchRunningJobId: string | null = null;
@@ -1269,7 +1401,7 @@ async function runBatchReviewOnce(id:string, onlyIndex?:number): Promise<void> {
           const item=itemByKey.get(key); if(!item)throw new Error("原题来源不存在");
           const latest=await buildCurrentWrongReview();
           if(!latest.items.some(x=>sourceKey(x.bank.id,x.question.id)===key))throw new Error("原题已不是当前错题，请重新发起任务");
-          const requestId=crypto.randomUUID();
+          const requestId=createUuid();
           batchCurrentRequestId=requestId; requested++;
           const input={review:{...review,items:[item]},sourceContext:[],generationOptions:{count:2}};
           const response=await invoke<string>("generate_ai_review",{requestId,input});
@@ -1411,7 +1543,7 @@ async function generateAiReviewOnce(): Promise<void> {
     aiReviewError = "请先配置 AI API";
     return aiReviewView(questionId);
   }
-  const requestId = crypto.randomUUID();
+  const requestId = createUuid();
   aiPendingRequestId = requestId;
   aiReviewError = "";
   aiPreview = null;
@@ -1426,7 +1558,7 @@ async function generateAiReviewOnce(): Promise<void> {
       bank.questions.map(q => q.id)
     );
     if (existing.length) throw new Error(`题目 ID 已存在：${existing.map(q => q.external_id).join("、")}`);
-    pendingAiPersistence={id:crypto.randomUUID(),questionId,source:original.question,bank,model:status.model??"",generatedAt:new Date().toISOString()};
+    pendingAiPersistence={id:createUuid(),questionId,source:original.question,bank,model:status.model??"",generatedAt:new Date().toISOString()};
     await persistGeneratedDraft();
   } catch (error) {
     if (aiPendingRequestId === requestId) aiReviewError = pendingAiPersistence?"候选格式通过，但本机草稿保存失败。请保持此页面并重试保存，重试保存不会请求 AI；关闭应用前未保存的结果可能丢失。":error instanceof Error ? error.message : String(error);
@@ -1467,14 +1599,30 @@ async function exportSelectedBanks(){
   await saveJsonFile(`knoop-bundle-${date}.json`,bundle,`导出 ${bundle.banks.length} 个题库`);
 }
 
-app.addEventListener("click",async e=>{const target=(e.target as HTMLElement).closest<HTMLElement>("[data-action]");if(!target||studyBusy)return;const action=target.dataset.action!;
-  try {
+app.addEventListener("click",async e=>{const target=(e.target as HTMLElement).closest<HTMLElement>("[data-action]");if(!target||studyBusy||formBusy||target.matches(":disabled"))return;const action=target.dataset.action!;
+  if(action==="eink-refresh")return; // Native request has its own busy guard and does not save study state.
+  const directoryAction=action==="directory-go"||action.startsWith("start-directory:")||action.startsWith("start-directory-search:")||action.startsWith("jump-session:");
+  const directoryGuard=directoryActionAllowed;
+  const stillDirectory=()=>directoryGuard===directoryActionAllowed&&directoryGuard(target);
+  if(directoryAction&&!stillDirectory())return;
+  feedback.startAction(action,target);
+  try { await (async()=>{
     if(restoreSyncPending&&action!=="backup-sync")return;
     if(!action.startsWith("option:")&&!action.startsWith("temp-")&&!action.startsWith("manual:")&&!["submit","next","toggle-quick","show-content"].includes(action))await flushDrafts();
+    if(directoryAction&&!stillDirectory())return;
+    if(action==="toggle-question-more"){
+      const open=target.getAttribute("aria-expanded")!=="true";
+      target.setAttribute("aria-expanded",String(open));target.textContent=open?"收起":"更多";
+      const actions=target.closest<HTMLElement>(".question-actions")!;
+      actions.querySelectorAll<HTMLElement>(".question-extra-action").forEach(button=>{button.hidden=!open;});
+      if(open)requestAnimationFrame(()=>revealAboveBottom(actions));
+      return;
+    }
     if(action==="back")return await goBack();
     if(action==="home")return await navigate({view:"home"});
     if(action==="import")return navigate({view:"import"});
     if(action==="backup")return navigate({view:"backup"});
+    if(action==="screen")return navigate({view:"screen"});
     if(action==="sessions")return navigate({view:"sessions"});
     if(action==="ai-drafts")return navigate({view:"ai-drafts"});
     if(action==="ai-retry-persist")return await withStudyAction(async()=>{await persistGeneratedDraft();const id=aiRouteQuestionId();if(id)await aiReviewView(id);});
@@ -1499,26 +1647,26 @@ app.addEventListener("click",async e=>{const target=(e.target as HTMLElement).cl
     if(action==="wrong"||action==="favorites"||action==="killed"||action==="notes"||action==="reviews")return navigate({view:"list",kind:action});
     if(action==="stats")return navigate({view:"stats"});
     if(action==="temp-groups")return navigate({view:"temp-groups"});
-    if(action.startsWith("temp-open:")){const id=action.slice(10);const group=await getTempGroup(id);if(!group)return tempGroupsView();if(group.completed_at)await restartTempGroup(group);return navigate({view:"temp-session",id});}
-    if(action.startsWith("temp-restart:")){const id=action.slice(13);const group=await getTempGroup(id);if(!group)return tempGroupsView();await restartTempGroup(group);return navigate({view:"temp-session",id});}
+    if(action.startsWith("temp-open:")){const id=action.slice(10);const group=await getTempGroup(id);if(!group)return tempGroupsView();if(group.completed_at){await restartTempGroup(group);readingLayout.startNewItem();}return navigate({view:"temp-session",id});}
+    if(action.startsWith("temp-restart:")){const id=action.slice(13);const group=await getTempGroup(id);if(!group)return tempGroupsView();await restartTempGroup(group);readingLayout.startNewItem();return navigate({view:"temp-session",id});}
     if(action.startsWith("temp-delete:")){const id=action.slice(12);if(!confirm("删除这个临时回炉题组及其练习进度？"))return;await deleteTempGroup(id);notify("已删除 AI 题组","ok");return navigate({view:"temp-groups"},true);}
     if(action==="adjust-types"){app.querySelector<HTMLButtonElement>('.setup-types [data-action^="filter-type:"]')?.focus();return;}
     if(action.startsWith("filter-type:")){const type=action.slice("filter-type:".length) as BrushType;if(!brushTypes.includes(type))return;capturePracticeSetup();enabledBrushTypes.has(type)?enabledBrushTypes.delete(type):enabledBrushTypes.add(type);saveBrushTypes();const route=history.state as Route;if(route.view==="choose")return chooseScope(route.nodeIds??(route.nodeId?[route.nodeId]:[]),action);return;}
     if(action==="export-error-review")return exportWrongReview();
     if(action==="batch-new"){batchSelectedSources.clear();return navigate({view:"batch-review"});}
     if(action.startsWith("batch-open:"))return navigate({view:"batch-review",id:action.slice(11)});
-    if(action==="batch-save-config")return saveBatchConfig();
+    if(action==="batch-save-config")return await saveBatchConfig();
     if(action==="batch-clear-config"){await invoke("clear_ai_config");const route=history.state as Route;if(route.view==="batch-review")return batchReviewView(route.id);return;}
     if(action==="batch-create")return createBatchReviewJob();
     if(action==="batch-run"){const id=batchRouteId();if(id&&confirm("继续将再次请求未成功的原题，可能收费。格式通过的原题结果保留，不重新请求。确认继续？"))return runBatchReview(id);return;}
     if(action.startsWith("batch-retry:")){const id=batchRouteId();if(id&&confirm("重试将再次发送尚未成功的原题请求，可能再次收费；格式通过原题不会重新请求。确认重试？"))return runBatchReview(id,Number(action.slice(12)));return;}
     if(action==="batch-cancel")return cancelBatchReview();
-    if(action==="batch-save-ready")return saveReadyBatches();
+    if(action==="batch-save-ready")return await saveReadyBatches();
     if(action==="batch-delete"){const id=batchRouteId();if(!id)return;if(!confirm("删除这项批量回炉任务及未保存的候选题？已保存的AI 题组会保留。"))return;await deleteBatchJob(id);return navigate({view:"list",kind:"wrong"},true);}
     if(action.startsWith("ai-review:")){aiReviewError="";return navigate({view:"ai-review",questionId:decodeURIComponent(action.slice(10))});}
-    if(action==="ai-save-config")return saveAiConfig();
-    if(action==="ai-save-group")return saveAiTempGroup();
-    if(action==="ai-clear-config")return clearAiConfig();
+    if(action==="ai-save-config")return await saveAiConfig();
+    if(action==="ai-save-group")return await saveAiTempGroup();
+    if(action==="ai-clear-config")return await clearAiConfig();
     if(action==="ai-generate")return generateAiReview();
     if(action==="ai-cancel")return cancelAiReview();
     if(action==="export-repair-review")return exportRepairReview();
@@ -1537,18 +1685,18 @@ app.addEventListener("click",async e=>{const target=(e.target as HTMLElement).cl
     if(action.startsWith("scope-node:")){toggleScopeNode(action.slice("scope-node:".length));return scopeView(action);}
     if(action.startsWith("scope-bank:")){toggleScopeBank(action.slice("scope-bank:".length));return scopeView(action);}
     if(action==="scope-next"){practiceSetup=null;return navigate({view:"choose",nodeIds:[...selectedScopeNodes]});}
-    if(action==="save-scope-preset"){const route=history.state as Route;const ids=route.view==="choose"?(route.nodeIds??(route.nodeId?[route.nodeId]:[])):[];return saveScopePreset(ids);}
-    if(action.startsWith("start-scope:")){const mode=action.slice("start-scope:".length);const route=history.state as Route;const ids=route.view==="choose"?(route.nodeIds??(route.nodeId?[route.nodeId]:[])):[];const random=mode==="random"||mode==="memorization-random";const count=random?setupCount(mode==="random"?"#random-count":"#memorization-random-count"):undefined;if(random&&count===undefined)return;return startScope(mode,ids,count);}
+    if(action==="save-scope-preset"){const route=history.state as Route;const ids=route.view==="choose"?(route.nodeIds??(route.nodeId?[route.nodeId]:[])):[];return await saveScopePreset(ids);}
+    if(action.startsWith("start-scope:")){const mode=action.slice("start-scope:".length);const route=history.state as Route;const ids=route.view==="choose"?(route.nodeIds??(route.nodeId?[route.nodeId]:[])):[];const random=mode==="random"||mode==="memorization-random";const count=random?setupCount(mode==="random"?"#random-count":"#memorization-random-count"):undefined;if(random&&count===undefined)return;return await startScope(mode,ids,count);}
     if(action.startsWith("open-directory:")){capturePracticeSetup();const kind=action.slice("open-directory:".length) as DirectoryKind;const route=history.state as Route;const ids=route.view==="choose"?(route.nodeIds??(route.nodeId?[route.nodeId]:[])):[];return navigate({view:"directory",nodeIds:ids,kind,query:""});}
     if(action==="session-directory"){if(!activeSession)return;return navigate({view:"directory",sessionId:activeSession.id,kind:activeSession.mode==="memorization"?"memorization":"brush",query:""});}
-    if(action==="directory-go"){const route=history.state as Route;if(route.view!=="directory")return;const raw=Number(document.querySelector<HTMLInputElement>("#directory-index")?.value||0);const index=Math.trunc(raw)-1;if(index<0)return notify("请输入有效题号");if(route.sessionId){const session=await sessionById(route.sessionId);if(!session)return notify("学习进度不存在");const ids=JSON.parse(session.question_ids_json) as string[];if(index>=ids.length)return notify(`题号应在 1-${ids.length} 之间`);const saved=JSON.parse(session.state_json||"{}") as {quickMode?:boolean};quickMode=!!saved.quickMode;activeSession=session;const found=await getQuestions(ids);const byId=new Map(found.map(r=>[r.id,r]));activeRows=ids.map(id=>byId.get(id)).filter(Boolean) as QuestionRow[];selection.clear();excludedOptions.clear();blankValue="";pageState={};await saveSession(session.id,index,{quickMode});return navigate({view:"session",id:session.id});}const all=await questionsForScope(route.nodeIds??[]);const rows=route.kind==="memorization"?all.filter(q=>q.type==="memorization"):all.filter(isEnabledBrush);if(index>=rows.length)return notify(`题号应在 1-${rows.length} 之间`);const mode=route.kind==="memorization"?"memorization":"sequential";const id=await createSession(mode,{nodeIds:route.nodeIds??[],order:"direct"},rows.map(r=>r.id),index);return navigate({view:"session",id});}
-    if(action.startsWith("start-directory-search:")){const order=action.slice("start-directory-search:".length);const route=history.state as Route;if(route.view!=="directory"||route.sessionId)return;const query=route.query?.trim()??"";if(!query)return;const all=await questionsForScope(route.nodeIds??[]);let rows=(route.kind==="memorization"?all.filter(q=>q.type==="memorization"):all.filter(isEnabledBrush)).filter(r=>directoryMatches(parseQuestion(r),query));if(order==="random")rows=shuffled(rows);if(!rows.length)return notify("没有匹配内容");const mode=route.kind==="memorization"?"memorization":order==="random"?"random":"sequential";const id=await createSession(mode,{nodeIds:route.nodeIds??[],order,source:"directory-search",searchQuery:query},rows.map(r=>r.id));return navigate({view:"session",id});}
-    if(action.startsWith("start-directory:")){const index=Number(action.slice("start-directory:".length));const route=history.state as Route;if(route.view!=="directory"||route.sessionId)return;const all=await questionsForScope(route.nodeIds??[]);const rows=route.kind==="memorization"?all.filter(q=>q.type==="memorization"):all.filter(isEnabledBrush);if(!rows.length||!Number.isInteger(index)||index<0||index>=rows.length)return;const mode=route.kind==="memorization"?"memorization":"sequential";const id=await createSession(mode,{nodeIds:route.nodeIds??[],order:"direct"},rows.map(r=>r.id),index);return navigate({view:"session",id});}
-    if(action.startsWith("jump-session:")){const route=history.state as Route;const sessionId=route.view==="directory"&&route.sessionId?route.sessionId:activeSession?.id;if(!sessionId)return;const session=await sessionById(sessionId);if(!session)return;const ids=JSON.parse(session.question_ids_json) as string[];const index=Number(action.slice("jump-session:".length));if(!Number.isInteger(index)||index<0||index>=ids.length)return;const saved=JSON.parse(session.state_json||"{}") as {quickMode?:boolean};quickMode=!!saved.quickMode;const found=await getQuestions(ids);const byId=new Map(found.map(r=>[r.id,r]));activeRows=ids.map(id=>byId.get(id)).filter(Boolean) as QuestionRow[];selection.clear();excludedOptions.clear();blankValue="";pageState={};await saveSession(session.id,index,{quickMode});session.current_index=index;activeSession=session;return navigate({view:"session",id:session.id});}
+    if(action==="directory-go"){const route=history.state as Route;if(route.view!=="directory")return;const raw=Number(document.querySelector<HTMLInputElement>("#directory-index")?.value||0);const index=Math.trunc(raw)-1;if(index<0)return notify("请输入有效题号");if(route.sessionId){const session=await sessionById(route.sessionId);if(!stillDirectory())return;if(!session)return notify("学习进度不存在");const ids=JSON.parse(session.question_ids_json) as string[];if(index>=ids.length)return notify(`题号应在 1-${ids.length} 之间`);const saved=JSON.parse(session.state_json||"{}") as {quickMode?:boolean};quickMode=!!saved.quickMode;activeSession=session;const found=await getQuestions(ids);if(!stillDirectory())return;const byId=new Map(found.map(r=>[r.id,r]));activeRows=ids.map(id=>byId.get(id)).filter(Boolean) as QuestionRow[];selection.clear();excludedOptions.clear();blankValue="";pageState={};await saveSession(session.id,index,{quickMode});readingLayout.startNewItem();return navigate({view:"session",id:session.id});}const all=await questionsForScope(route.nodeIds??[]);if(!stillDirectory())return;const rows=route.kind==="memorization"?all.filter(q=>q.type==="memorization"):all.filter(isEnabledBrush);if(index>=rows.length)return notify(`题号应在 1-${rows.length} 之间`);const mode=route.kind==="memorization"?"memorization":"sequential";const id=await createSession(mode,{nodeIds:route.nodeIds??[],order:"direct"},rows.map(r=>r.id),index);return navigate({view:"session",id});}
+    if(action.startsWith("start-directory-search:")){const order=action.slice("start-directory-search:".length);const route=history.state as Route;if(route.view!=="directory"||route.sessionId)return;const query=route.query?.trim()??"";if(!query)return;const all=await questionsForScope(route.nodeIds??[]);if(!stillDirectory())return;let rows=(route.kind==="memorization"?all.filter(q=>q.type==="memorization"):all.filter(isEnabledBrush)).filter(r=>directoryMatches(parseQuestion(r),query));if(order==="random")rows=shuffled(rows);if(!rows.length)return notify("没有匹配内容");const mode=route.kind==="memorization"?"memorization":order==="random"?"random":"sequential";const id=await createSession(mode,{nodeIds:route.nodeIds??[],order,source:"directory-search",searchQuery:query},rows.map(r=>r.id));return navigate({view:"session",id});}
+    if(action.startsWith("start-directory:")){const index=Number(action.slice("start-directory:".length));const route=history.state as Route;if(route.view!=="directory"||route.sessionId)return;const all=await questionsForScope(route.nodeIds??[]);if(!stillDirectory())return;const rows=route.kind==="memorization"?all.filter(q=>q.type==="memorization"):all.filter(isEnabledBrush);if(!rows.length||!Number.isInteger(index)||index<0||index>=rows.length)return;const mode=route.kind==="memorization"?"memorization":"sequential";const id=await createSession(mode,{nodeIds:route.nodeIds??[],order:"direct"},rows.map(r=>r.id),index);return navigate({view:"session",id});}
+    if(action.startsWith("jump-session:")){const route=history.state as Route;const sessionId=route.view==="directory"&&route.sessionId?route.sessionId:activeSession?.id;if(!sessionId)return;const session=await sessionById(sessionId);if(!session)return;const ids=JSON.parse(session.question_ids_json) as string[];const index=Number(action.slice("jump-session:".length));if(!Number.isInteger(index)||index<0||index>=ids.length)return;const saved=JSON.parse(session.state_json||"{}") as {quickMode?:boolean};quickMode=!!saved.quickMode;const found=await getQuestions(ids);if(!stillDirectory())return;const byId=new Map(found.map(r=>[r.id,r]));activeRows=ids.map(id=>byId.get(id)).filter(Boolean) as QuestionRow[];selection.clear();excludedOptions.clear();blankValue="";pageState={};await saveSession(session.id,index,{quickMode});session.current_index=index;activeSession=session;readingLayout.startNewItem();return navigate({view:"session",id:session.id});}
     if(action.startsWith("delete-bank:")){const bankId=action.slice("delete-bank:".length);const bank=(await getBanks()).find(b=>b.id===bankId);if(!confirm(`删除题库“${bank?.title??bankId}”？\n\n该题库的题目、作答记录、收藏、审核、笔记和相关未完成进度都会一并删除。此操作不可撤销。`))return;const btn=target as HTMLButtonElement;const oldText=btn.textContent;btn.disabled=true;btn.textContent="删除中…";try{await deleteBank(bankId);notify("已删除题库","ok");return importView();}catch(err){btn.disabled=false;btn.textContent=oldText;throw err;}}
     if(action.startsWith("temp-option:")){selectTempOption(action.slice(12));return;}
     if(action==="temp-submit"||action.startsWith("temp-manual:")||action==="temp-next")return await withStudyAction(()=>tempAction(action));
-    if(action==="toggle-quick"){quickMode=!quickMode;await persistDraft();return quizView();}
+    if(action==="toggle-quick")return await toggleQuickOrReveal(false);
     if(action.startsWith("option:")&&!pageState.submitted){
       const id=action.slice(7); if(id===suppressOptionClickId&&Date.now()<suppressOptionClickUntil)return; const q=parseQuestion(activeRows[activeSession!.current_index]); excludedOptions.delete(id);
       if(q.type==="single_choice"){
@@ -1556,37 +1704,37 @@ app.addEventListener("click",async e=>{const target=(e.target as HTMLElement).cl
       } else if(q.type==="multiple_choice") {
         selection.has(id)?selection.delete(id):selection.add(id);
       }
-      updateOptionStyles(selection,excludedOptions);void persistDraft().catch(reportSaveError);return;
+      updateOptionStyles(selection,excludedOptions);void persistDraft().catch(reportDraftError);return;
     }
     if(action==="submit")return await submit();
     if(action.startsWith("manual:")){const ok=action.endsWith("true");return await record(activeRows[activeSession!.current_index].id,blankValue,"manual",ok);}
-    if(action==="show-content"){pageState.revealed=true;await persistDraft();return quizView();}
+    if(action==="show-content")return await toggleQuickOrReveal(true);
     if(action==="next")return await next();
-    if(action.startsWith("favorite:")){await toggleFavorite(action.slice(9));return quizView();}
+    if(action.startsWith("favorite:"))return await toggleFavoriteButton(target,action.slice(9));
     if(action.startsWith("kill:")){
       const id=action.slice(5); if(await isReviewed(id))return;
       const already=await isKilled(id);
       if(!already&&!confirm("斩杀这道题？\n\n以后新建刷题会话会自动排除，可在“题库 → 已斩杀”中恢复。"))return;
-      const killed=await toggleKilled(id); if(killed)return next(); return quizView();
+      const killed=await toggleKilled(id); if(killed)return next(); if(target.isConnected){target.textContent="斩杀";target.classList.remove("restore-action");}return;
     }
     if(action.startsWith("restore-killed:")){await toggleKilled(action.slice("restore-killed:".length));notify("已恢复题目","ok");return listView("killed");}
     if(action.startsWith("review:"))return navigate({view:"review",questionId:action.slice(7)});
     if(action.startsWith("review-preset:")){applyReviewPreset(Number(action.slice("review-preset:".length)));return;}
-    if(action.startsWith("save-review:"))return saveQuestionReview(action.slice("save-review:".length));
+    if(action.startsWith("save-review:"))return await withFormSave(()=>saveQuestionReview(action.slice("save-review:".length)));
     if(action.startsWith("complete-review:")){const id=action.slice("complete-review:".length);if(!confirm("确认这道题已经检查或返修完成？\n\n历史判分会保留；当前错题仅看返修后的新作答，并按审核前状态决定是否恢复到题池。"))return;await completeReview(id);notify("已完成返修","ok");return await goBack();}
     if(action.startsWith("cancel-review:")){const id=action.slice("cancel-review:".length);if(!confirm("取消这道题的审核标记？"))return;await cancelReview(id);notify("已取消审核","ok");return goBack();}
     if(action.startsWith("note:"))return navigate({view:"note",questionId:action.slice(5)});
-    if(action.startsWith("save-note:"))return saveQuestionNote(action.slice("save-note:".length));
+    if(action.startsWith("save-note:"))return await withFormSave(()=>saveQuestionNote(action.slice("save-note:".length)));
     if(action.startsWith("delete-note:")){const id=action.slice("delete-note:".length);if(!confirm("删除这条笔记？"))return;await saveNote(id,"");notify("已删除笔记","ok");return goBack();}
     if(action.startsWith("edit:")){const current=isRoute(history.state)?history.state:null;return navigate({view:"edit",questionId:action.slice(5),returnTo:asReturnTarget(current)});}
-    if(action.startsWith("save-edit-review:"))return await saveQuestionEdit(action.slice("save-edit-review:".length),true);
-    if(action.startsWith("save-edit:"))return await saveQuestionEdit(action.slice("save-edit:".length));
+    if(action.startsWith("save-edit-review:"))return await withFormSave(()=>saveQuestionEdit(action.slice("save-edit-review:".length),true));
+    if(action.startsWith("save-edit:"))return await withFormSave(()=>saveQuestionEdit(action.slice("save-edit:".length)));
     if(action.startsWith("practice:")){const rows=action.endsWith("wrong")?await wrongQuestions():await favoriteQuestions();return startRows(action.endsWith("wrong")?"wrong":"favorites",rows.filter(graded));}
-  } catch(err){notify(err instanceof Error?err.message:String(err));}
+  })(); } catch(err){notify(err instanceof Error?err.message:String(err),"error",action);}
 });
 
 window.addEventListener("popstate", async e => {
-  try { await studyDone;await flushDrafts(); } catch(error){if(renderedRoute)history.replaceState(renderedRoute,"");reportSaveError(error);return;}
+  try { await studyDone;await flushDrafts(); } catch(error){if(renderedRoute)history.replaceState(renderedRoute,"");reportDraftError(error);return;}
   if(pendingAiPersistence){if(renderedRoute)history.replaceState(renderedRoute,"");notify("候选尚未保存，请重试保存或明确丢弃后离开");return;}
   if(restoreSyncPending){history.replaceState({view:"backup"} satisfies Route,"");await backupView();return;}
   if(forcedBackTarget){const target=forcedBackTarget;forcedBackTarget=null;history.replaceState(target,"");void renderRoute(target);return;}

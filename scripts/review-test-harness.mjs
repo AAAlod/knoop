@@ -5,6 +5,7 @@ import {readFile,mkdir,writeFile} from 'node:fs/promises';
 import {execFileSync} from 'node:child_process';
 import {createRequire} from 'node:module';
 import {createServer} from 'node:http';
+import {resolve,relative,extname} from 'node:path';
 export async function reviewHarness({baselineRef,suffix='window.__review={navigate};',out}){
   const baseline=process.argv.includes('--baseline'),sqlite=new DatabaseSync(':memory:');let pause=null,fault=0,writes=0;
   const bind=p=>Object.fromEntries(p.map((v,i)=>[`$${i+1}`,v]));
@@ -20,6 +21,7 @@ export async function reviewHarness({baselineRef,suffix='window.__review={naviga
     b.onResolve({filter:/^@tauri-apps\/plugin-sql$/},()=>({path:'sql',namespace:'mock'}));b.onResolve({filter:/^@tauri-apps\/api\/core$/},()=>({path:'core',namespace:'mock'}));
     b.onLoad({filter:/.*/,namespace:'mock'},a=>({loader:'js',contents:a.path==='sql'?`export default {load:async()=>${browser?'({execute:(s,p)=>window.__sql("execute",s,p),select:(s,p)=>window.__sql("select",s,p)})':'globalThis.__reviewAdapter'}};`:`export const invoke=(c,a)=>${browser?'window.__native(c,a)':'globalThis.__reviewNative(c,a)'};`}));
     b.onLoad({filter:/[\\/]src[\\/](main|db|temp-review|batch-review)\.ts$/},async a=>{const path='src/'+a.path.split(/[\\/]/).at(-1);return {loader:'ts',contents:await source(path)+(path==='src/main.ts'?'\n'+suffix:'')};});
+    if(browser&&baseline)b.onLoad({filter:/[\\/]src[\\/]style\.css$/},async()=>({loader:'css',contents:await source('src/style.css')}));
   }});
   const built=await build({stdin:{contents:'export * as d from "./src/db";export * as t from "./src/temp-review";export * as b from "./src/batch-review";export * as a from "./src/ai-drafts";export * as backup from "./src/backup";export * as f from "./src/backup-format";export * as v from "./src/backup-validation";',resolveDir:process.cwd(),loader:'ts'},bundle:true,platform:'node',format:'cjs',write:false,plugins:[plugin(false)],logLevel:'silent'});
   const mod={exports:{}};new Function('module','exports',built.outputFiles[0].text)(mod,mod.exports);await mod.exports.d.db();
@@ -29,8 +31,12 @@ export async function reviewHarness({baselineRef,suffix='window.__review={naviga
   const errors=[];
   async function ui(){
     const require=createRequire(import.meta.url),{chromium}=require(process.env.PLAYWRIGHT_MODULE_PATH||'playwright');
-    const built=await build({entryPoints:['src/main.ts'],bundle:true,platform:'browser',write:false,loader:{'.css':'empty'},plugins:[plugin(true)],logLevel:'silent'}),css=await source('src/style.css');
-    server=createServer((req,res)=>{res.setHeader('Content-Type','text/html; charset=utf-8');res.end(`<style>${css}</style><div id="app"></div><script>${built.outputFiles[0].text.replaceAll('</script>','<\\/script>')}</script>`);});await new Promise(r=>server.listen(0,'127.0.0.1',r));
+    // Serve the CSS and fonts imported by the app rather than a stylesheet-only approximation.
+    const outdir=resolve(out,'web'),built=await build({entryPoints:['src/main.ts'],entryNames:'app',assetNames:'assets/[name]-[hash]',outdir,bundle:true,platform:'browser',target:'chrome83',write:false,loader:{'.woff':'file','.woff2':'file','.ttf':'file'},plugins:[plugin(true)],logLevel:'silent'});
+    const files=new Map(built.outputFiles.map(file=>['/'+relative(outdir,file.path).replaceAll('\\','/'),file.contents]));
+    const html=(await source('index.html')).replace('/src/main.ts','/app.js').replace('</head>','<link rel="stylesheet" href="/app.css"></head>');
+    const mime={'.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.woff':'font/woff','.woff2':'font/woff2','.ttf':'font/ttf'};
+    server=createServer((req,res)=>{const path=new URL(req.url,'http://localhost').pathname;if(path==='/'){res.setHeader('Content-Type','text/html; charset=utf-8');return res.end(html);}const file=files.get(path);if(!file){res.statusCode=404;return res.end();}res.setHeader('Content-Type',mime[extname(path)]||'application/octet-stream');res.end(file);});await new Promise(r=>server.listen(0,'127.0.0.1',r));
     browser=await chromium.launch({headless:true,...(process.env.CHROME_PATH?{executablePath:process.env.CHROME_PATH}:{})});const context=await browser.newContext({viewport:{width:360,height:740}});await context.addInitScript(()=>history.replaceState({view:'home'},''));
     await context.exposeBinding('__sql',(_,op,s,p)=>adapter[op](s,p));await context.exposeBinding('__native',(_,c,a)=>native(c,a));page=await context.newPage();page.setDefaultTimeout(12000);page.on('pageerror',e=>errors.push(e.message));return page;
   }

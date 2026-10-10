@@ -1,3 +1,4 @@
+import { createUuid } from "./compat";
 import {db,atomicWrite,validateBank} from "./db";
 import {prepareTempGroup} from "./temp-review";
 import type {BankFile,QuestionInput} from "./types";
@@ -5,7 +6,7 @@ export interface AiDraft {id:string;source_question_id:string;source_question_ti
 export async function listAiDrafts():Promise<AiDraft[]>{return (await db()).select<AiDraft[]>("SELECT * FROM ai_review_drafts ORDER BY created_at DESC,id");}
 export async function getAiDraft(id:string):Promise<AiDraft|null>{return (await (await db()).select<AiDraft[]>("SELECT * FROM ai_review_drafts WHERE id=$1",[id]))[0]??null;}
 export async function latestAiDraft(questionId:string):Promise<AiDraft|null>{return (await (await db()).select<AiDraft[]>("SELECT * FROM ai_review_drafts WHERE source_question_id=$1 ORDER BY created_at DESC,id LIMIT 1",[questionId]))[0]??null;}
-export async function saveAiDraft(questionId:string,source:QuestionInput,bank:BankFile,model:string,generatedAt:string,id:string=crypto.randomUUID()):Promise<AiDraft>{
+export async function saveAiDraft(questionId:string,source:QuestionInput,bank:BankFile,model:string,generatedAt:string,id:string=createUuid()):Promise<AiDraft>{
   validateBank(bank);if(bank.questions.length!==2)throw new Error("待审核草稿必须有 2 道候选题");
   const existing=await getAiDraft(id);if(existing){if(existing.bank_json!==JSON.stringify(bank)||existing.source_question_id!==questionId||existing.model!==model)throw new Error("草稿身份冲突");return existing;}
   const draft:AiDraft={id,source_question_id:questionId,source_question_title:String(source.stem??source.front??source.prompt??"原题").split("\n")[0],source_question_json:JSON.stringify(source),bank_json:JSON.stringify(bank),model,generated_at:generatedAt,created_at:new Date().toISOString()};

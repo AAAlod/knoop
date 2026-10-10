@@ -1,3 +1,4 @@
+import { cloneJson } from "./compat";
 import { invoke } from "@tauri-apps/api/core";
 import { db, atomicWrite, type AtomicStep } from "./db";
 import { backupTables, preferenceKeys, backupDigest, canonical, type BackupFile, type BackupRow, type BackupTable, type Preferences } from "./backup-format";
@@ -39,7 +40,7 @@ export interface PreparedRestore {target:BackupFile;before:BackupFile;safetyFile
 const preparedRestores=new WeakSet<PreparedRestore>();
 let restoring=false;
 export async function prepareRestore(raw:unknown,storage:PreferenceStorage=localStorage):Promise<PreparedRestore>{
-  const target=structuredClone(await validateBackup(raw)),before=await buildBackup(storage);
+  const target=cloneJson(await validateBackup(raw)),before=await buildBackup(storage);
   const safetyFile=await invoke<string>("save_restore_safety_copy",{data:JSON.stringify(before)});
   const prepared={target,before,safetyFile};preparedRestores.add(prepared);return prepared;
 }

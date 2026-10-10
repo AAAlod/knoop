@@ -1,3 +1,4 @@
+import { createUuid } from "./compat";
 import Database from "@tauri-apps/plugin-sql";
 import { invoke } from "@tauri-apps/api/core";
 import validateV1 from "./generated/knoop-bank-v1-validator.js";
@@ -332,7 +333,7 @@ export async function deleteBank(bankId: string): Promise<void> {
 }
 
 export async function createSession(mode: string, scope: unknown, questionIds: string[], startIndex = 0) {
-  const id = crypto.randomUUID(), stamp = now();
+  const id = createUuid(), stamp = now();
   const safeIndex = Math.max(0, Math.min(Math.trunc(startIndex), Math.max(0, questionIds.length - 1)));
   await (await db()).execute("INSERT INTO sessions(id,mode,scope_json,question_ids_json,current_index,state_json,created_at,updated_at) VALUES($1,$2,$3,$4,$5,'{}',$6,$6)", [id, mode, JSON.stringify(scope), JSON.stringify(questionIds), safeIndex, stamp]);
   return id;

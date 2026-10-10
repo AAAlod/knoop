@@ -19,3 +19,6 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# The optional mobile plugin is registered by its class/method names from Rust.
+-keep class com.kehai.knoop.EinkPlugin { public *; }

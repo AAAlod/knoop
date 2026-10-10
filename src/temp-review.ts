@@ -1,3 +1,4 @@
+import { createUuid } from "./compat";
 import { db, atomicWrite, type AtomicStep } from "./db";
 import type { BankFile } from "./types";
 
@@ -43,7 +44,7 @@ export async function createTempGroupWithMetadata(bank: BankFile, sourceId: stri
 }
 export function prepareTempGroup(bank: BankFile, sourceId: string, sourceTitle: string, model: string, generatedAt: string, metadata: Array<{questionId:string;derivedFrom:string;generatedAt:string;model:string}>): {id:string;step:AtomicStep} {
   if (!bank.questions.length || metadata.length !== bank.questions.length || metadata.some((item,index)=>item.questionId!==bank.questions[index].id)) throw new Error("临时题组来源信息不完整");
-  const id = crypto.randomUUID(), stamp = new Date().toISOString();
+  const id = createUuid(), stamp = new Date().toISOString();
   return {id,step:{sql:"INSERT INTO ai_review_groups(id,source_question_id,source_question_title,model,generated_at,created_at,updated_at,bank_json,question_meta_json,current_index,state_json,results_json) VALUES($1,$2,$3,$4,$5,$6,$6,$7,$8,0,$9,'[]')",params:[id,sourceId,sourceTitle,model,generatedAt,stamp,JSON.stringify(bank),JSON.stringify(metadata),JSON.stringify(emptyTempState())]}};
 }
 export async function listTempGroups(): Promise<TempGroup[]> {

@@ -4,8 +4,6 @@
 
 **0.1.12 Alpha**
 
-0.1.12 UI / 文案整改与证据见 [整改报告](docs/review-ui-0.1.12-status.md)，Android 真机验收见 [0.1.12 检查清单](docs/device-test-checklist-0.1.12.md)。
-
 [![AI-assisted development](https://img.shields.io/badge/development-AI--assisted-6f42c1)](#ai-辅助开发)
 
 [简体中文](README.md)
@@ -15,6 +13,12 @@ Knoop 最初只是一个临时需求：我想要一个能直接导入自己题�
 实际使用过程中，它逐渐加入了题库树、跨题库组题、背诵、笔记、错题回炉、题目审核与返修、LaTeX 等功能，于是成为了现在的 Knoop。
 
 目前它仍然主要服务于我自己的学习流程，也仍处于 Alpha 阶段。
+
+## 当前方向：墨水屏优先
+
+Knoop 目前专注于 Android 墨水屏设备，以 **汉王 Clear6 Plus** 为首个适配目标。当前开发重点是黑白高对比界面、文字与公式的可读性，以及适合墨水屏的作答、翻页和背诵体验。
+
+通用 Android 手机和平板版本的适配计划于 **2027 年再推进**。
 
 ## 功能
 
@@ -86,15 +90,13 @@ Knoop 目前主要使用：
 - SQLite
 - KaTeX
 
-主要目标平台是 Android 手机和平板。
-
 ## 构建
 
 安装依赖后运行 `npm run build` 构建前端；Android Release 的工具要求、构建命令和可选签名方式见 [构建说明](docs/BUILDING.md)。
 
 目前仅提供 Android **arm64-v8a（64 位 ARM）** Release APK，其他架构尚未支持。
 
-基础无签名检查运行 `npm run check:ci`；GitHub Actions 执行相同入口，包含构建、仓库检查、AI/临时题组/批次和 SQLite 回归。Android 真机验收见 [0.1.11 检查清单](docs/device-test-checklist-0.1.11.md)。合成题库运行 `npm run fixtures:device` 生成到 `artifacts/device-tests/`，不含真实题目或密钥。
+开发检查可运行 `npm run check:ci`，GitHub Actions 使用相同入口。
 
 ## AI 辅助开发
 

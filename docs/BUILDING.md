@@ -52,6 +52,8 @@ Signing uses `--ks-pass env:KNOOP_KEYSTORE_PASSWORD` (or the explicitly named pa
 
 ## Checks
 
-GitHub Actions installs dependencies with `npm ci` and runs `npm run check:ci`, without Android signing secrets or APK publishing. The same entry runs locally. `npm run test:ci-guards` temporarily injects a TypeScript error and test assertion failure, verifies nonzero exits, and restores the affected files; run it alone, then run `check:ci` to verify the restored state. Hosted CI runs require a pushed commit and are separate from local verification.
+GitHub Actions installs dependencies with `npm ci`, installs the locked Playwright Chromium and Linux system libraries, and runs `npm run check:ci`, without Android signing secrets or APK publishing. The same entry runs locally. `npm run test:ci-guards` temporarily injects a TypeScript error and test assertion failure, verifies nonzero exits, and restores the affected files; run it alone, then run `check:ci` to verify the restored state. Hosted CI runs require a pushed commit and are separate from local verification.
 
 Browser suites A/B/C accept `-- --ui`; D/E always run the browser. Supply an installed Playwright module via `PLAYWRIGHT_MODULE_PATH` and Chrome via `CHROME_PATH`, or use a normal Playwright installation. Rust tests are run locally with `cargo test --offline`; the basic Ubuntu workflow intentionally avoids platform GUI dependencies and does not claim Rust/Android coverage.
+
+UI checks are included in `check:ci`. On a clean local checkout run `npm run setup:ui` after `npm ci`; see [UI testing](ui-testing.md) for browser setup, individual suites and evidence paths.

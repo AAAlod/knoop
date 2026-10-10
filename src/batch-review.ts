@@ -1,3 +1,4 @@
+import { createUuid } from "./compat";
 import { db, atomicWrite } from "./db";
 import { prepareTempGroup } from "./temp-review";
 import type { BankFile, ErrorReviewFile } from "./types";
@@ -32,7 +33,7 @@ export function makeBatches(review: ErrorReviewFile): ReviewBatch[] {
   return batches;
 }
 export async function createBatchJob(review: ErrorReviewFile, model: string): Promise<string> {
-  const id=crypto.randomUUID(), stamp=new Date().toISOString();
+  const id=createUuid(), stamp=new Date().toISOString();
   await (await db()).execute(
     "INSERT INTO ai_review_batch_jobs(id,model,review_json,batches_json,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$5)",
     [id,model,JSON.stringify(review),JSON.stringify(makeBatches(review)),stamp]

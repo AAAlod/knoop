@@ -9,6 +9,7 @@ declare module "katex/contrib/auto-render" {
     ignoredTags?: string[];
     ignoredClasses?: string[];
     throwOnError?: boolean;
+    errorColor?: string;
     strict?: boolean | "ignore" | "warn" | "error";
     trust?: boolean;
   }
