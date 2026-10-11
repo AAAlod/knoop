@@ -336,7 +336,7 @@ async function home() {
   if(!summary.banks&&!resume&&!tempGroupCount&&!pendingDraftCount&&!previousBatchJob){app.innerHTML=`<main class="home-main">${heading}<div class="home-study">${button("导入题库","import","primary")}</div></main>`;feedback.mount();readingLayout.afterRender();window.scrollTo(0,0);return;}
   app.innerHTML = `<main class="home-main">${heading}<div class="home-summary"><span>题库 ${summary.banks}</span><span>总 ${summary.totalContent}</span><span>可刷 ${summary.questions}</span><span>背诵 ${summary.memorization}</span></div>
     <section class="home-study"><div class="stack">
-      ${resume ? `<div class="home-resume">${button("继续", `resume:${resume.id}`, "primary")}<p class="home-session-summary">${esc(sessionSummary(resume))}</p></div>` : ""}
+      ${resume ? `<div class="home-resume"><button class="primary" data-action="resume:${esc(resume.id)}"><span>继续</span><span class="home-session-summary">${esc(sessionSummary(resume))}</span></button></div>` : ""}
       ${summary.banks ? button("新练习", "scope", resume ? "secondary" : "primary") : button("导入题库", "import", resume ? "secondary" : "primary")}
     </div></section>
     ${recentCard}
@@ -364,7 +364,7 @@ async function sessionsView():Promise<void>{
   const cards=sessions.map((session,index)=>{
     const scope=JSON.parse(session.scope_json),ids=JSON.parse(session.question_ids_json) as string[],available=ids.filter(id=>present.has(id)).length;
     const names=Array.isArray(scope.nodeIds)?scope.nodeIds.map((id:string)=>titles.get(id)??"失效范围").join("、"):session.mode==="wrong"?"当前错题":session.mode==="favorites"?"收藏":"已保存范围";
-    return `<section class="card"><h2>${esc(sessionSummary(session))}</h2><p>${esc(names)} · 更新 ${esc(formatUpdatedAt(session.updated_at))}</p>${available===ids.length?button("继续",`resume:${session.id}`,index===0?"primary":"secondary"):`<p>范围内容已失效，请重新选择范围。现存 ${available} / ${ids.length} 项。</p>`}</section>`;
+    return `<section class="card session-card"><div class="session-summary"><h2>${esc(sessionSummary(session))}</h2><p>${esc(names)} · 更新 ${esc(formatUpdatedAt(session.updated_at))}</p></div>${available===ids.length?button("继续",`resume:${session.id}`,index===0?"primary":"secondary"):`<p>范围内容已失效，请重新选择范围。现存 ${available} / ${ids.length} 项。</p>`}</section>`;
   }).join("");
   shell("未完成",cards||emptyState("暂无未完成练习","",{text:"新练习",id:"scope"}));
 }
@@ -652,21 +652,21 @@ async function chooseScope(nodeIds: string[],focusAction="") {
   if(answerable.length)setup.count=String(Math.min(Math.max(1,Number(setup.count)||10),answerable.length));
   const filters=brushTypes.map(type=>`<button class="type-filter ${enabledBrushTypes.has(type)?"active":""}" data-action="filter-type:${type}" aria-pressed="${enabledBrushTypes.has(type)}">${brushLabels[type]}</button>`).join("");
   const orderOptions=(order:string)=>`<option value="sequential" ${order==="sequential"?"selected":""}>顺序</option><option value="random" ${order==="random"?"selected":""}>随机</option>`;
-  const brushCard = `<section class="card practice-setup"><h2 data-brush-count="${answerable.length}">刷题 ${answerable.length}</h2>${answerable.length?`
+  const brushCard = `<section class="card practice-setup">${answerable.length?`<div class="setup-heading"><h2 data-brush-count="${answerable.length}">刷题 ${answerable.length}</h2>
     <div class="setup-controls"><label>方式<select id="practice-order">${orderOptions(setup.order)}</select></label>
-    <label id="practice-count-label" ${setup.order==="random"?"":"hidden"}>题数<input id="random-count" type="number" min="1" max="${answerable.length}" value="${esc(setup.count)}"></label></div>
-    ${button("开始练习",`start-scope:${setup.order}`,"primary")}
-    ${button("目录","open-directory:brush","secondary")}
+    <label id="practice-count-label" ${setup.order==="random"?"":"hidden"}>题数<input id="random-count" type="number" min="1" max="${answerable.length}" value="${esc(setup.count)}"></label></div></div>
+    <div class="setup-actions">${button("开始练习",`start-scope:${setup.order}`,"primary")}
+    ${button("目录","open-directory:brush","secondary")}</div>
     <details class="preset-save" ${setup.saveOpen?"open":""}><summary>保存方案</summary><div class="preset-save-body">
       <label>名称<input id="preset-name" type="text" maxlength="40" placeholder="练习方案名称" value="${esc(setup.name)}"></label>
       <button data-action="save-scope-preset">保存</button>
     </div></details>
-  `:button("调整题型","adjust-types")}</section>`;
-  const memoCard = memorization.length ? `<section class="card practice-setup"><h2 data-memo-count="${memorization.length}">背诵 ${memorization.length}</h2>
+  `:`<h2 data-brush-count="0">刷题 0</h2>${button("调整题型","adjust-types")}`}</section>`;
+  const memoCard = memorization.length ? `<section class="card practice-setup"><div class="setup-heading"><h2 data-memo-count="${memorization.length}">背诵 ${memorization.length}</h2>
     <div class="setup-controls"><label>方式<select id="memorization-order">${orderOptions(setup.memoOrder)}</select></label>
-    <label id="memorization-count-label" ${setup.memoOrder==="random"?"":"hidden"}>材料数<input id="memorization-random-count" type="number" min="1" max="${memorization.length}" value="${esc(setup.memoCount)}"></label></div>
-    ${button("开始背诵",setup.memoOrder==="random"?"start-scope:memorization-random":"start-scope:memorization",answerable.length?"secondary":"primary")}
-    ${button("目录","open-directory:memorization","secondary")}
+    <label id="memorization-count-label" ${setup.memoOrder==="random"?"":"hidden"}>材料数<input id="memorization-random-count" type="number" min="1" max="${memorization.length}" value="${esc(setup.memoCount)}"></label></div></div>
+    <div class="setup-actions">${button("开始背诵",setup.memoOrder==="random"?"start-scope:memorization-random":"start-scope:memorization",answerable.length?"secondary":"primary")}
+    ${button("目录","open-directory:memorization","secondary")}</div>
   </section>` : "";
   shell("选择模式",`<section class="setup-types type-filter-row"><h2 class="section-title">题型</h2><div class="type-filter-options">${filters}</div></section>${brushCard}${memoCard}`);
   for(const kind of ["practice","memorization"]){

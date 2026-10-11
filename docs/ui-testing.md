@@ -20,7 +20,7 @@ npm run check:ci
 | --- | --- | --- |
 | `test:review-ui` | 既有产品流程、状态和数据隔离 | `artifacts/review-ui/` |
 | `test:eink-ui` | 黑白状态、禁用和焦点、真实公式资源 | `artifacts/eink-t1/browser/` |
-| `test:eink-layout` | 窄屏、大字、间距与触控尺寸 | `artifacts/eink-t2/browser/` |
+| `test:eink-layout` | 窄屏、大字、间距与触控尺寸；PA6 首页 AI 入口、顺序 / 随机模式操作同屏可达 | `artifacts/eink-t2/browser/` |
 | `test:eink-bottom` | 动态底栏、同行菜单、键盘视口与草稿 | `artifacts/eink-t3/browser/` |
 | `test:eink-search` | 无 inert、中文组合输入、过期点击、保存等待、万题目录 | `artifacts/eink-t4/browser/` |
 | `test:eink-reading` | 固定顶栏、阅读位置、编辑 / 目录往返、新题与临时组 | `artifacts/eink-t5/browser/` |

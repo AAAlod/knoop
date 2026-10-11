@@ -46,6 +46,34 @@ try{
     await d.importBank({...fixture,import:{...fixture.import,bankId:'eink-layout-second'}});
     await route({view:'import'});await page.locator('.bank-row').first().waitFor();for(const bank of await page.locator('.bank-row').all())await wrapped(bank.locator('.bank-actions>button'),6);await gap(page.locator('.bank-select>input').first(),page.locator('.bank-select>span').first(),10);await touch(page.locator('.bank-select,.bank-actions>button,.bank-export-toolbar>button'));await audit(`banks-${width}`);
   });
+  await h.check('PA6 home exposes both AI entries without scrolling and keeps resume context',async()=>{
+    await h.reset();await page.evaluate(()=>localStorage.clear());await d.importBank(fixture);
+    const row=(await d.getQuestions())[0],sid=await d.createSession('sequential',{},[row.id]);
+    await page.setViewportSize({width:467,height:600});await route({view:'home'});
+    await page.locator('.home-resume').waitFor();
+    const resume=page.locator(`[data-action="resume:${sid}"]`),summary=page.locator('.home-session-summary');
+    assert.match(await summary.innerText(),/1 \/ 1/);
+    assert.equal(await resume.locator('.home-session-summary').count(),1);
+    for(const id of ['batch-new','temp-groups']){
+      const b=await box(page.locator(`[data-action="${id}"]`));assert(b.y>=0&&b.y+b.height<=600,`${id} requires scrolling`);
+    }
+    assert(await page.evaluate(()=>document.documentElement.scrollHeight<=innerHeight+1),'home retains unnecessary scroll space');
+    await touch(page.locator('.home-main button'));await audit('home-compact-467');
+  });
+  await h.check('PA6 setup shows brush and memorization actions together in sequential and random modes',async()=>{
+    await h.reset();await page.evaluate(()=>localStorage.clear());await d.importBank({...fixture,questions:[...fixture.questions,{id:'memo',nodeId:'child',type:'memorization',order:2,prompt:'合成背诵',content:'合成材料'}]});
+    await page.setViewportSize({width:467,height:600});await route({view:'scope'});await page.locator('[data-bank-check]').check();await act('scope-next').click();await page.locator('#practice-order').waitFor();
+    for(const order of ['sequential','random']){
+      await page.locator('#practice-order').selectOption(order);await page.locator('#memorization-order').selectOption(order);
+      for(const el of await page.locator('.setup-actions button').all()){
+        const b=await box(el);assert(b.y>=56&&b.y+b.height<=600,`${order} action requires scrolling`);
+      }
+      assert.equal(await page.locator('#random-count').isVisible(),order==='random');assert.equal(await page.locator('#memorization-random-count').isVisible(),order==='random');
+      await touch(page.locator('.setup-actions button,.setup-controls select,.setup-controls input:visible'));await audit(`setup-compact-${order}`);
+    }
+    await page.locator('.preset-save summary').click();await page.locator('#preset-name').fill('紧凑布局仍可保存');
+    for(const width of [320,360]){await page.setViewportSize({width,height:600});await audit(`setup-compact-expanded-${width}`);await touch(page.locator('.setup-actions button,.type-filter'));}
+  });
   await h.check('enlarged controls wrap with spacing on the PA6-sized viewport',async()=>{
     await page.setViewportSize({width:467,height:600});await page.addStyleTag({content:'button,input,select,summary,label{font-size:24px!important}'});
     const row=(await d.getQuestions())[0],sid=await d.createSession('sequential',{},[row.id]);await route({view:'session',id:sid});await page.locator('.question-more-toggle').click();await wrapped(page.locator('.question-extra-action:visible'),6);await audit('more-large-text');

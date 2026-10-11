@@ -1,7 +1,7 @@
 {
   "name": "knoop",
   "private": true,
-  "version": "0.1.12",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite --port 1420 --strictPort",

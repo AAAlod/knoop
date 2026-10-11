@@ -28,7 +28,7 @@ try{
     const rows=await seed();await session(rows.slice(0,2));
     for(const [width,height] of [[320,600],[467,600],[680,600],[467,320]]){
       await page.setViewportSize({width,height});await scroll(0);
-      const r=await page.evaluate(()=>({head:document.querySelector('header').getBoundingClientRect().bottom,first:document.querySelector('main').firstElementChild.getBoundingClientRect().top,wide:document.documentElement.scrollWidth>innerWidth+1}));assert(r.first>=r.head+15);assert.equal(r.wide,false);
+      const r=await page.evaluate(()=>({head:document.querySelector('header').getBoundingClientRect().bottom,first:document.querySelector('main').firstElementChild.getBoundingClientRect().top,wide:document.documentElement.scrollWidth>innerWidth+1}));assert(r.first-r.head>=8&&r.first-r.head<=16,'content must clear the header with compact spacing');assert.equal(r.wide,false);
     }
     await page.addStyleTag({content:'header{min-height:104px}header h1{font-size:26px}'});await settle();await scroll(700);near(await page.locator('header').evaluate(el=>el.getBoundingClientRect().top),0,'large header');
     await route({view:'edit',questionId:rows[0].id});await settle();assert.equal(await y(),0);assert(await page.locator('textarea').first().evaluate(el=>el.getBoundingClientRect().top>=document.querySelector('header').getBoundingClientRect().bottom));await shot('large-header-editor-entry');

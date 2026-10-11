@@ -76,7 +76,7 @@ header h1{display:block}
 .note-list-card{display:grid;gap:12px}
 .note-preview{padding:12px;border-radius:10px;background:var(--paper);color:var(--ink-muted);line-height:1.5;overflow-wrap:anywhere}
 
-@media(max-width:480px){
+@media(max-width:420px){
   .bank-row{grid-template-columns:minmax(0,1fr);align-items:start}
   .bank-actions{flex:1 0 100%;width:100%;justify-content:flex-end}
   .bank-actions button{flex:0 1 auto}
@@ -351,3 +351,51 @@ input[type="checkbox"]:indeterminate{background-color:var(--ink);background-imag
 input[type="radio"]:checked{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='4'/%3E%3C/svg%3E")}
 input:disabled,textarea:disabled{opacity:1;color:var(--ink-muted);-webkit-text-fill-color:var(--ink-muted);background-color:var(--paper)}
 input::placeholder,textarea::placeholder{color:var(--ink-muted);opacity:1}
+
+/* Compact e-ink pages: keep 48px touch targets and readable text, trim whitespace. */
+main{padding-top:12px;padding-bottom:calc(16px + env(safe-area-inset-bottom))}
+.has-fixed-header>main{padding-top:calc(var(--header-height,56px) + 12px)}
+.home-main{padding-top:calc(12px + env(safe-area-inset-top));padding-bottom:calc(12px + env(safe-area-inset-bottom))}
+.home-heading{margin-bottom:8px}
+.home-summary{grid-template-columns:repeat(4,max-content);gap:4px 12px;margin-bottom:10px}
+.home-study{margin-bottom:10px}
+.home-study .stack{gap:8px}
+.home-resume button{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:8px;text-align:left}
+.home-resume .home-session-summary{margin:0;text-align:right;color:inherit;font-weight:500}
+.home-shortcuts{gap:8px;margin-bottom:8px}
+.home-nav{row-gap:0}
+.home-ai{margin-top:8px;padding-top:4px}
+.home-ai h2{margin:0 0 2px}
+.home-recent-preset{padding:8px 0;margin-bottom:8px}
+@media(min-width:440px){.home-main>nav.home-nav{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:360px){.home-summary{grid-template-columns:repeat(2,max-content)}}
+.setup-types{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:start;gap:8px;margin-bottom:8px}
+.setup-types h2{padding-top:14px}
+.practice-setup{padding:12px;margin-bottom:10px}
+.setup-heading{display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px;align-items:center}
+.setup-heading h2{margin:0}
+.setup-controls{grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}
+.setup-controls label{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:6px;min-width:0}
+.setup-controls input,.setup-controls select{margin:0;padding:8px;min-height:48px}
+.setup-actions{display:grid;grid-template-columns:minmax(0,1fr) minmax(88px,.55fr);gap:8px;margin-top:8px}
+.setup-actions button{min-width:0;padding:10px 8px}
+.practice-setup .preset-save{margin-top:8px;padding-top:0}
+.practice-setup .preset-save summary{padding:12px 0}
+.directory-item{min-height:48px;padding-top:6px;padding-bottom:6px}
+.directory-list{gap:6px}
+.stats{gap:8px}
+.stats>div{padding:12px 10px}
+.stats-rules{margin-top:12px}
+.section-title{margin-top:14px;margin-bottom:8px}
+.stem{margin:12px 0}
+.answer-panel{margin-top:12px;padding:12px}
+.ai-settings{padding:10px 12px}
+.ai-settings p{margin:8px 0}
+.ai-settings label{margin-top:8px}
+.message:empty{margin:0;padding:0}
+.session-card{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;padding:12px}
+.session-summary{min-width:0;overflow-wrap:anywhere}
+.session-summary h2{font-size:19px;margin:0 0 4px}
+.session-summary p{margin:0;line-height:1.45;font-size:14px}
+.session-card>button{width:auto;margin-top:0}
+.session-card>p{grid-column:1/-1;margin:0}
